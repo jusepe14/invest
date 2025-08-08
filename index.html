@@ -11,7 +11,7 @@
   <!-- PapaParse (CSV) -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <!-- pdf.js (solo para extracción básica de texto) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.js" integrity="sha512-dx4nUQd3gLQvSviF8j8p5KzV+5m7jZ3qvJgYq3w3tGmP0i5Q4zXQkF0b6xvdrx0XH7d0Wv2x4wP7Qk+2K9z+hw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://unpkg.com/pdfjs-dist@4.4.168/build/pdf.min.js"></script>
   <style>
     /* Evita zoom en inputs numéricos en iOS */
     input[type=number] { font-size: 16px; }
@@ -166,7 +166,7 @@ let state = { positions: [] };
 
 // Config PDF.js worker (necesario en Pages/CDN)
 if (window.pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.js';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@4.4.168/build/pdf.worker.min.js';
 }
 
 function uid() { return Math.random().toString(36).slice(2, 10); }
