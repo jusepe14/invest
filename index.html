@@ -163,6 +163,11 @@ const LS_KEY = 'inv_state_v2';
 /** @type {{positions: Array<{id:string,isin:string,ticker?:string,nombre?:string,qty:number,avgCost:number,price?:number,currency?:string,sector?:string,broker?:string}>}} */
 let state = { positions: [] };
 
+// Config PDF.js worker (necesario en Pages/CDN)
+if (window.pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.js';
+}
+
 function uid() { return Math.random().toString(36).slice(2, 10); }
 
 function loadFromLocalStorage() {
@@ -337,9 +342,6 @@ function mapCsvRows(rows) {
     out.push({ isin, ticker, nombre, qty, avgCost, price, currency, sector, broker });
   }
   return out;
-});
-  }
-  return out;
 }
 
 function normalizeKeys(o) {
@@ -385,7 +387,8 @@ pdfInput.addEventListener('change', async () => {
   const file = pdfInput.files?.[0];
   if (!file) return;
   try {
-    const text = await extractPdfText(file);
+    const rawText = await extractPdfText(file);
+    const text = rawText.replace(/Code ISIN/gi, 'ISIN: ');
     const parsed = parseKnownStatements(text);
     if (!parsed.length) {
       alert('Parser genérico no pudo identificar posiciones. Pásame un PDF de ejemplo para afinar.');
@@ -489,7 +492,7 @@ async function updatePrices() {
   }
   saveToLocalStorage();
   render();
-  alert(`Precios actualizados: ${okCount} ok${failCount?`, ${failCount} con fallo/CORS`:''}`);
+  alert(`Precios actualizados: ${okCount} ok${failCount ? `, ${failCount} con fallo/CORS` : ''}`);
 }
 
 async function yahooQuotes(symbols) {
