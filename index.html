@@ -63,6 +63,7 @@
         <div class="space-y-2">
           <button id="btnSaveLS" class="px-3 py-2 bg-indigo-600 text-white rounded-xl">Guardar en este navegador</button>
           <button id="btnLoadLS" class="px-3 py-2 bg-indigo-100 text-indigo-700 rounded-xl">Cargar de este navegador</button>
+          <button id="btnMergeISIN" class="px-3 py-2 bg-amber-500 text-white rounded-xl">Fusionar por ISIN (PMP)</button>
           <button id="btnReset" class="px-3 py-2 bg-rose-600 text-white rounded-xl">Reset</button>
         </div>
       </div>
@@ -273,6 +274,54 @@ function aggregateBy(items, keyFn) {
   return acc;
 }
 
+function mergePositionsByISIN(list) {
+  const map = new Map();
+  for (const p of list) {
+    if (!p || !p.isin) continue;
+    const key = String(p.isin).toUpperCase();
+    if (!map.has(key)) {
+      map.set(key, {
+        id: uid(),
+        isin: key,
+        qty: 0,
+        _cost: 0,
+        price: undefined,
+        currency: p.currency || 'EUR',
+        tickerSet: new Set(),
+        nombreSet: new Set(),
+        sectorSet: new Set(),
+        brokerSet: new Set(),
+      });
+    }
+    const acc = map.get(key);
+    acc.qty += Number(p.qty || 0);
+    acc._cost += Number(p.avgCost || 0) * Number(p.qty || 0);
+    if (p.price != null) acc.price = Number(p.price);
+    if (p.ticker) acc.tickerSet.add(p.ticker);
+    if (p.nombre) acc.nombreSet.add(p.nombre);
+    if (p.sector) acc.sectorSet.add(p.sector);
+    if (p.broker) acc.brokerSet.add(p.broker);
+    if (!acc.currency && p.currency) acc.currency = p.currency;
+  }
+  const out = [];
+  for (const acc of map.values()) {
+    const avgCost = acc.qty ? acc._cost / acc.qty : 0;
+    out.push({
+      id: acc.id,
+      isin: acc.isin,
+      ticker: acc.tickerSet.size ? [...acc.tickerSet][0] : undefined,
+      nombre: acc.nombreSet.size ? [...acc.nombreSet][0] : undefined,
+      qty: Number(acc.qty.toFixed(6)),
+      avgCost: Number(avgCost.toFixed(6)),
+      price: acc.price,
+      currency: acc.currency,
+      sector: acc.sectorSet.size ? [...acc.sectorSet][0] : '',
+      broker: acc.brokerSet.size ? [...acc.brokerSet].join(', ') : ''
+    });
+  }
+  return out;
+}
+
 // ====== Eventos ======
 
 document.getElementById('addForm').addEventListener('submit', e => {
@@ -381,6 +430,14 @@ document.getElementById('jsonInput').addEventListener('change', () => {
   state = { positions: [] }; saveToLocalStorage(); render();
 });
 
+document.getElementById('btnMergeISIN').addEventListener('click', () => {
+  const before = state.positions.length;
+  state.positions = mergePositionsByISIN(state.positions);
+  saveToLocalStorage();
+  render();
+  alert(`Fusionadas por ISIN: ${before} → ${state.positions.length}`);
+});
+
 // PDF (muy básico: extrae texto y busca patrones típicos)
 const pdfInput = document.getElementById('pdfInput');
 pdfInput.addEventListener('change', async () => {
@@ -400,20 +457,35 @@ pdfInput.addEventListener('change', async () => {
     render();
   } catch (e) {
     console.error(e);
-    alert('No se pudo leer el PDF.');
+    alert('No se pudo leer el PDF: ' + (e?.message || e?.toString() || 'error desconocido'));
   }
 });
 
 async function extractPdfText(file) {
   const array = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: array }).promise;
-  let text = '';
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const c = await page.getTextContent();
-    text += '\n' + c.items.map(it => it.str).join(' ');
+  // Intento 1: con worker
+  try {
+    const pdf = await pdfjsLib.getDocument({ data: array }).promise;
+    let text = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const c = await page.getTextContent();
+      text += '
+' + c.items.map(it => it.str).join(' ');
+    }
+    return text;
+  } catch (e1) {
+    console.warn('PDF.js worker falló, reintentando sin worker…', e1);
+    const pdf = await pdfjsLib.getDocument({ data: array, disableWorker: true }).promise;
+    let text = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const c = await page.getTextContent();
+      text += '
+' + c.items.map(it => it.str).join(' ');
+    }
+    return text;
   }
-  return text;
 }
 
 /* --- Parser Trade Republic (override) --- */
