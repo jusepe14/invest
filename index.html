@@ -470,8 +470,7 @@ async function extractPdfText(file) {
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const c = await page.getTextContent();
-      text += '
-' + c.items.map(it => it.str).join(' ');
+      text += '\n' + c.items.map(it => it.str).join(' ');
     }
     return text;
   } catch (e1) {
@@ -481,8 +480,7 @@ async function extractPdfText(file) {
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const c = await page.getTextContent();
-      text += '
-' + c.items.map(it => it.str).join(' ');
+      text += '\n' + c.items.map(it => it.str).join(' ');
     }
     return text;
   }
