@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Inversiones — MVP (sin build)</title>
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <!-- PapaParse (CSV) -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <!-- pdf.js (solo para extracción básica de texto) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.js" integrity="sha512-dx4nUQd3gLQvSviF8j8p5KzV+5m7jZ3qvJgYq3w3tGmP0i5Q4zXQkF0b6xvdrx0XH7d0Wv2x4wP7Qk+2K9z+hw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <style>
+    /* Evita zoom en inputs numéricos en iOS */
+    input[type=number] { font-size: 16px; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <header class="p-4 md:p-6 border-b bg-white sticky top-0 z-10">
+    <div class="max-w-6xl mx-auto flex items-center justify-between gap-4">
+      <h1 class="text-2xl md:text-3xl font-semibold">💹 Inversiones — MVP</h1>
+      <div class="text-sm text-slate-500">100% estático · funciona con doble clic</div>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto p-4 md:p-6 space-y-6">
+    <!-- Controles principales -->
+    <section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div class="p-4 bg-white rounded-2xl shadow">
+        <h2 class="font-semibold mb-3">Importar / Exportar</h2>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-sm font-medium mb-1">Importar CSV (posiciones)</label>
+            <input id="csvInput" type="file" accept=".csv,text/csv" class="block w-full" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Importar PDF (Trade Republic / MyInvestor)</label>
+            <input id="pdfInput" type="file" accept="application/pdf" class="block w-full" />
+            <p class="text-xs text-slate-500 mt-1">MVP: parsers básicos. Mejor con un ejemplo real para afinar.</p>
+          </div>
+          <div class="flex gap-2">
+            <button id="btnExportJSON" class="px-3 py-2 bg-slate-900 text-white rounded-xl">Exportar JSON</button>
+            <label class="px-3 py-2 bg-slate-100 rounded-xl cursor-pointer">
+              Importar JSON
+              <input id="jsonInput" type="file" accept="application/json" class="hidden" />
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="p-4 bg-white rounded-2xl shadow">
+        <h2 class="font-semibold mb-3">Precios</h2>
+        <div class="space-y-2">
+          <button id="btnUpdatePrices" class="px-3 py-2 bg-emerald-600 text-white rounded-xl">Actualizar precios (beta)</button>
+          <p class="text-xs text-slate-500">Usa <strong>ticker</strong> si está disponible. Para ISIN global sin ticker, añade el símbolo manualmente o importa CSV del broker.</p>
+        </div>
+      </div>
+
+      <div class="p-4 bg-white rounded-2xl shadow">
+        <h2 class="font-semibold mb-3">Persistencia</h2>
+        <div class="space-y-2">
+          <button id="btnSaveLS" class="px-3 py-2 bg-indigo-600 text-white rounded-xl">Guardar en este navegador</button>
+          <button id="btnLoadLS" class="px-3 py-2 bg-indigo-100 text-indigo-700 rounded-xl">Cargar de este navegador</button>
+          <button id="btnReset" class="px-3 py-2 bg-rose-600 text-white rounded-xl">Reset</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Alta manual -->
+    <section class="p-4 bg-white rounded-2xl shadow">
+      <h2 class="font-semibold mb-3">Añadir posición</h2>
+      <form id="addForm" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 items-end">
+        <div>
+          <label class="block text-xs mb-1">ISIN</label>
+          <input name="isin" required placeholder="ES0143416115" class="w-full border rounded-xl p-2" />
+        </div>
+        <div>
+          <label class="block text-xs mb-1">Ticker (opcional)</label>
+          <input name="ticker" placeholder="AAPL" class="w-full border rounded-xl p-2" />
+        </div>
+        <div>
+          <label class="block text-xs mb-1">Nombre</label>
+          <input name="nombre" placeholder="Apple Inc." class="w-full border rounded-xl p-2" />
+        </div>
+        <div>
+          <label class="block text-xs mb-1">Cantidad</label>
+          <input name="qty" type="number" step="0.0001" min="0" required class="w-full border rounded-xl p-2" />
+        </div>
+        <div>
+          <label class="block text-xs mb-1">Precio medio</label>
+          <input name="avgCost" type="number" step="0.0001" min="0" required class="w-full border rounded-xl p-2" />
+        </div>
+        <div>
+          <label class="block text-xs mb-1">Precio actual</label>
+          <input name="price" type="number" step="0.0001" min="0" class="w-full border rounded-xl p-2" placeholder="opcional" />
+        </div>
+        <div>
+          <label class="block text-xs mb-1">Moneda</label>
+          <input name="currency" placeholder="EUR/USD" class="w-full border rounded-xl p-2" />
+        </div>
+        <div>
+          <label class="block text-xs mb-1">Sector</label>
+          <input name="sector" placeholder="Tecnología" class="w-full border rounded-xl p-2" />
+        </div>
+        <div>
+          <label class="block text-xs mb-1">Broker</label>
+          <input name="broker" placeholder="TR / MI" class="w-full border rounded-xl p-2" />
+        </div>
+        <div class="col-span-2 md:col-span-4 lg:col-span-8">
+          <button class="px-3 py-2 bg-slate-900 text-white rounded-xl">Añadir</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Tabla -->
+    <section class="p-4 bg-white rounded-2xl shadow">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-semibold">Posiciones</h2>
+        <div class="text-sm text-slate-500" id="summary"></div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm" id="tbl">
+          <thead class="bg-slate-100">
+            <tr>
+              <th class="text-left p-2">ISIN</th>
+              <th class="text-left p-2">Ticker</th>
+              <th class="text-left p-2">Nombre</th>
+              <th class="text-right p-2">Cant.</th>
+              <th class="text-right p-2">P. medio</th>
+              <th class="text-right p-2">P. actual</th>
+              <th class="text-right p-2">Valor</th>
+              <th class="text-right p-2">P/L %</th>
+              <th class="text-left p-2">Sector</th>
+              <th class="text-left p-2">Broker</th>
+              <th class="text-right p-2">Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Gráficos -->
+    <section class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="p-4 bg-white rounded-2xl shadow">
+        <h2 class="font-semibold mb-3">Distribución por sector</h2>
+        <canvas id="sectorChart" height="200"></canvas>
+      </div>
+      <div class="p-4 bg-white rounded-2xl shadow">
+        <h2 class="font-semibold mb-3">Valor por broker</h2>
+        <canvas id="brokerChart" height="200"></canvas>
+      </div>
+    </section>
+
+    <footer class="pt-6 pb-8 text-center text-xs text-slate-500">MVP v0.1 — LocalStorage · CSV · PDF básico · Charts</footer>
+  </main>
+
+<script>
+// ====== Estado ======
+const LS_KEY = 'inv_state_v2';
+/** @type {{positions: Array<{id:string,isin:string,ticker?:string,nombre?:string,qty:number,avgCost:number,price?:number,currency?:string,sector?:string,broker?:string}>}} */
+let state = { positions: [] };
+
+function uid() { return Math.random().toString(36).slice(2, 10); }
+
+function loadFromLocalStorage() {
+  const raw = localStorage.getItem(LS_KEY);
+  if (raw) {
+    try { state = JSON.parse(raw); } catch {}
+    render();
+  }
+}
+function saveToLocalStorage() { localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+
+// ====== Render ======
+let sectorChart, brokerChart;
+
+function currency(value) {
+  if (value == null || isNaN(value)) return '-';
+  return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 2 }).format(value);
+}
+
+function render() {
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  let totalValor = 0, totalCoste = 0;
+
+  for (const p of state.positions) {
+    const valor = (p.price ?? 0) * p.qty;
+    const coste = (p.avgCost ?? 0) * p.qty;
+    totalValor += valor;
+    totalCoste += coste;
+
+    const tr = document.createElement('tr');
+    tr.className = 'border-b';
+    tr.innerHTML = `
+      <td class="p-2">${escapeHtml(p.isin)}</td>
+      <td class="p-2">${escapeHtml(p.ticker || '')}</td>
+      <td class="p-2">${escapeHtml(p.nombre || '')}</td>
+      <td class="p-2 text-right">${fmtNum(p.qty)}</td>
+      <td class="p-2 text-right">${fmtNum(p.avgCost)}</td>
+      <td class="p-2 text-right">${p.price != null ? fmtNum(p.price) : '-'}</td>
+      <td class="p-2 text-right">${currency(valor)}</td>
+      <td class="p-2 text-right">${plPct(coste, valor)}</td>
+      <td class="p-2">${escapeHtml(p.sector || '')}</td>
+      <td class="p-2">${escapeHtml(p.broker || '')}</td>
+      <td class="p-2 text-right">
+        <button class="text-rose-600 hover:underline" data-del="${p.id}">Eliminar</button>
+      </td>`;
+    tbody.appendChild(tr);
+  }
+
+  document.getElementById('summary').textContent = `Valor: ${currency(totalValor)} · P/L: ${plPct(totalCoste, totalValor)}`;
+
+  renderCharts();
+}
+
+function fmtNum(n) {
+  const v = Number(n);
+  if (!isFinite(v)) return '-';
+  return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 4 }).format(v);
+}
+
+function plPct(coste, valor) {
+  if (!isFinite(coste) || coste === 0 || !isFinite(valor)) return '-';
+  const pct = ((valor - coste) / coste) * 100;
+  return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+}
+
+function escapeHtml(s) { return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+
+function renderCharts() {
+  const bySector = aggregateBy(state.positions, p => (p.sector || 'Sin sector'));
+  const byBroker = aggregateBy(state.positions, p => (p.broker || 'Sin broker'));
+
+  const sectorLabels = Object.keys(bySector);
+  const sectorData = sectorLabels.map(k => bySector[k]);
+  const brokerLabels = Object.keys(byBroker);
+  const brokerData = brokerLabels.map(k => byBroker[k]);
+
+  const ctx1 = document.getElementById('sectorChart');
+  const ctx2 = document.getElementById('brokerChart');
+
+  sectorChart?.destroy();
+  brokerChart?.destroy();
+
+  sectorChart = new Chart(ctx1, {
+    type: 'pie',
+    data: { labels: sectorLabels, datasets: [{ data: sectorData }] },
+    options: { responsive: true }
+  });
+  brokerChart = new Chart(ctx2, {
+    type: 'bar',
+    data: { labels: brokerLabels, datasets: [{ data: brokerData }] },
+    options: { responsive: true, scales: { y: { beginAtZero: true }}}
+  });
+}
+
+function aggregateBy(items, keyFn) {
+  const acc = {};
+  for (const p of items) {
+    const key = keyFn(p);
+    const valor = (p.price ?? 0) * (p.qty ?? 0);
+    acc[key] = (acc[key] ?? 0) + valor;
+  }
+  return acc;
+}
+
+// ====== Eventos ======
+
+document.getElementById('addForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const pos = {
+    id: uid(),
+    isin: String(fd.get('isin')||'').trim().toUpperCase(),
+    ticker: String(fd.get('ticker')||'').trim().toUpperCase() || undefined,
+    nombre: String(fd.get('nombre')||'').trim(),
+    qty: Number(fd.get('qty')),
+    avgCost: Number(fd.get('avgCost')),
+    price: fd.get('price') ? Number(fd.get('price')) : undefined,
+    currency: String(fd.get('currency')||'').trim().toUpperCase() || 'EUR',
+    sector: String(fd.get('sector')||'').trim(),
+    broker: String(fd.get('broker')||'').trim(),
+  };
+  state.positions.push(pos);
+  saveToLocalStorage();
+  e.target.reset();
+  render();
+});
+
+document.getElementById('tbody').addEventListener('click', e => {
+  const btn = e.target.closest('[data-del]');
+  if (btn) {
+    const id = btn.getAttribute('data-del');
+    state.positions = state.positions.filter(p => p.id !== id);
+    saveToLocalStorage();
+    render();
+  }
+});
+
+// CSV
+const csvInput = document.getElementById('csvInput');
+csvInput.addEventListener('change', () => {
+  const file = csvInput.files?.[0];
+  if (!file) return;
+  Papa.parse(file, {
+    header: true,
+    skipEmptyLines: true,
+    complete: ({ data }) => {
+      const mapped = mapCsvRows(data);
+      if (!mapped.length) { alert('No se detectaron filas válidas en el CSV'); return; }
+      for (const m of mapped) { m.id = uid(); }
+      state.positions.push(...mapped);
+      saveToLocalStorage();
+      render();
+    }
+  });
+});
+
+function mapCsvRows(rows) {
+  const out = [];
+  for (const r of rows) {
+    const obj = normalizeKeys(r);
+    const isin = (obj.isin || obj['isincode'] || obj['isin_number'] || '').toUpperCase();
+    const ticker = (obj.ticker || obj.symbol || obj.simbolo || obj['símbolo'] || '').toUpperCase();
+    const nombre = obj.nombre || obj.name || '';
+    const qty = Number(obj.cantidad || obj.qty || obj.shares || obj.unidades || 0);
+    const avgCost = Number((obj.preciomedio ?? obj['precio medio'] ?? obj.averagecost ?? obj.avgcost ?? obj.ppc ?? obj.ppm ?? obj.price ?? 0));
+    const price = obj.precioactual ? Number(obj.precioactual) : undefined;
+    const currency = (obj.divisa || obj.moneda || obj.currency || 'EUR').toUpperCase();
+    const sector = obj.sector || '';
+    const broker = obj.broker || obj.plataforma || '';
+    if (!isin || !qty || !avgCost) continue;
+    out.push({ isin, ticker, nombre, qty, avgCost, price, currency, sector, broker });
+  }
+  return out;
+});
+  }
+  return out;
+}
+
+function normalizeKeys(o) {
+  const m = {};
+  for (const k in o) {
+    const nk = String(k).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,'');
+    m[nk] = typeof o[k] === 'string' ? o[k].trim() : o[k];
+  }
+  return m;
+}
+
+// JSON import/export
+ document.getElementById('btnExportJSON').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'inversiones.json'; a.click();
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById('jsonInput').addEventListener('change', () => {
+  const f = document.getElementById('jsonInput').files?.[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try { state = JSON.parse(reader.result); saveToLocalStorage(); render(); }
+    catch { alert('JSON inválido'); }
+  };
+  reader.readAsText(f);
+});
+
+// LocalStorage
+ document.getElementById('btnSaveLS').addEventListener('click', () => { saveToLocalStorage(); alert('Guardado en este navegador.'); });
+ document.getElementById('btnLoadLS').addEventListener('click', () => { loadFromLocalStorage(); alert('Cargado desde este navegador.'); });
+ document.getElementById('btnReset').addEventListener('click', () => {
+  if (!confirm('¿Seguro que quieres borrar todas las posiciones?')) return;
+  state = { positions: [] }; saveToLocalStorage(); render();
+});
+
+// PDF (muy básico: extrae texto y busca patrones típicos)
+const pdfInput = document.getElementById('pdfInput');
+pdfInput.addEventListener('change', async () => {
+  const file = pdfInput.files?.[0];
+  if (!file) return;
+  try {
+    const text = await extractPdfText(file);
+    const parsed = parseKnownStatements(text);
+    if (!parsed.length) {
+      alert('Parser genérico no pudo identificar posiciones. Pásame un PDF de ejemplo para afinar.');
+      return;
+    }
+    for (const p of parsed) p.id = uid()
+    state.positions.push(...parsed);
+    saveToLocalStorage();
+    render();
+  } catch (e) {
+    console.error(e);
+    alert('No se pudo leer el PDF.');
+  }
+});
+
+async function extractPdfText(file) {
+  const array = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: array }).promise;
+  let text = '';
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const c = await page.getTextContent();
+    text += '\n' + c.items.map(it => it.str).join(' ');
+  }
+  return text;
+}
+
+/* --- Parser Trade Republic (override) --- */
+function parseKnownStatements(text) {
+  const t = text.replace(/\s+/g, ' ').trim();
+  const out = [];
+  // Patrón TR: "<qty> tít. <Nombre> ... ISIN: <ISIN> ... <precio> <dd.mm.yyyy> <valorEUR>"
+  const isinRe = /ISIN:\s*([A-Z]{2}[A-Z0-9]{9}\d)/g;
+  let m;
+  while ((m = isinRe.exec(t))) {
+    const isin = m[1];
+    const left  = t.slice(Math.max(0, m.index - 160), m.index);
+    const right = t.slice(m.index, Math.min(t.length, m.index + 160));
+
+    // cantidad + nombre justo antes de "ISIN:"
+    let qty, nombre;
+    const qn = left.match(/(\d+[\.,]?\d*)\s*tít\.?\s*([A-Za-z0-9À-ÿ\.\-&,'’` ]{2,80})/);
+    if (qn) {
+      qty = Number(qn[1].replace(',', '.'));
+      nombre = qn[2].trim();
+    }
+
+    // precio y valor justo después de "ISIN:"
+    let price, value;
+    const pv = right.match(/ISIN:\s*[A-Z0-9]+\s+.*?(\d+[\.,]?\d*)\s+\d{2}\.\d{2}\.\d{4}\s+(\d+[\.,]?\d*)/);
+    if (pv) {
+      price = Number(pv[1].replace(',', '.'));
+      value = Number(pv[2].replace(',', '.'));
+    }
+
+    if (isin && qty && (price || value)) {
+      out.push({
+        isin,
+        nombre,
+        qty,
+        price: price || (value && qty ? value / qty : undefined),
+        currency: 'EUR',
+        broker: 'Trade Republic'
+      });
+    }
+  }
+
+  // Fallback genérico si no es TR
+  if (out.length === 0) {
+    const re = /\b([A-Z]{2,10})\b\s+([\w\-\.\& ]{2,40})\s+(\d+[\.,]?\d*)\s+(\d+[\.,]?\d*)/g;
+    let m2; 
+    while ((m2 = re.exec(t))) {
+      const ticker = m2[1];
+      const nombre = m2[2].trim();
+      const qty = Number(m2[3].replace(',', '.'));
+      const avgCost = Number(m2[4].replace(',', '.'));
+      if (qty > 0 && avgCost > 0) out.push({ ticker, nombre, qty, avgCost, currency: 'EUR' });
+    }
+  }
+
+  return out;
+}
+
+
+// ====== Precios (beta, sin garantías de CORS) ======
+document.getElementById('btnUpdatePrices').addEventListener('click', updatePrices);
+
+async function updatePrices() {
+  const tickers = [...new Set(state.positions.map(p => p.ticker).filter(Boolean))]; // usamos ticker si existe; ISIN no soportado por Yahoo directamente
+  if (!tickers.length) { alert('No hay tickers.'); return; }
+  const chunks = chunk(tickers, 40);
+  let okCount = 0, failCount = 0;
+  for (const ch of chunks) {
+    try {
+      const quotes = await yahooQuotes(ch);
+      for (const q of quotes) {
+        const p = state.positions.find(p => p.ticker === (q.symbol || '').toUpperCase());
+        if (p && isFinite(q.regularMarketPrice)) { p.price = Number(q.regularMarketPrice); okCount++; }
+      }
+    } catch(e) { console.warn('Chunk failed', e); failCount += ch.length; }
+  }
+  saveToLocalStorage();
+  render();
+  alert(`Precios actualizados: ${okCount} ok${failCount?`, ${failCount} con fallo/CORS`:''}`);
+}
+
+async function yahooQuotes(symbols) {
+  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols.join(','))}`;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    return j.quoteResponse?.result || [];
+  } catch (e) {
+    // Fallback vía proxy CORS genérico (puede caer)
+    const proxy = 'https://cors.isomorphic-git.org/';
+    const r2 = await fetch(proxy + url);
+    if (!r2.ok) throw new Error('Proxy HTTP ' + r2.status);
+    const j2 = await r2.json();
+    return j2.quoteResponse?.result || [];
+  }
+}
+
+function chunk(arr, n) { const out=[]; for (let i=0;i<arr.length;i+=n) out.push(arr.slice(i,i+n)); return out; }
+
+// ====== Init ======
+loadFromLocalStorage();
+render();
+</script>
+</body>
+</html>
