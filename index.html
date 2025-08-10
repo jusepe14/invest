@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Invest | Lector PDF cartera (v3.25 — país desde country.json, sector desde sectores.json, agregación, reconciliación, borrar y alta manual desde “+” en tabla)</title>
+    <title>Invest | Lector PDF cartera (v3.26 — alta “+” mejorado, editar y borrar)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -17,7 +17,9 @@
       table thead th { position: sticky; top: 0; background: #f1f5f9; }
       .btn { padding:.5rem .75rem; border-radius:.75rem; border:1px solid #cbd5e1; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.05); }
       .btn-primary { padding:.5rem .75rem; border-radius:.75rem; background:#0f172a; color:#fff; box-shadow:0 1px 2px rgba(0,0,0,.15); }
-      .icon-btn { padding:.25rem .4rem; border-radius:.5rem; border:1px solid #cbd5e1; background:#fff; }
+      .icon-btn { padding:.35rem .5rem; border-radius:.5rem; border:1px solid #cbd5e1; background:#fff; display:inline-flex; align-items:center; justify-content:center; }
+      .icon-circle { width:28px; height:28px; border-radius:999px; border:1px solid #cbd5e1; background:#ffffff; display:inline-flex; align-items:center; justify-content:center; box-shadow:0 1px 2px rgba(0,0,0,.06); }
+      .icon-circle:hover { background:#f8fafc; }
       .modal-backdrop { position: fixed; inset: 0; background: rgb(15 23 42 / 0.4); display: flex; align-items: center; justify-content: center; z-index: 50; }
       .modal-card { width: 100%; max-width: 720px; background: #fff; border-radius: 1rem; box-shadow: 0 10px 30px rgba(0,0,0,.2); }
       .modal-header { padding: 1rem 1.25rem; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
@@ -29,9 +31,11 @@
       .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: .75rem; }
       .label { font-size: .8rem; color: #475569; }
       .help { font-size: .75rem; color: #64748b; }
-      .danger { color: #b91c1c; }
       .err { font-size:.75rem; color:#b91c1c; margin-top:.25rem; }
-      .th-actions { display:flex; align-items:center; gap:.5rem; }
+      .danger { color:#b91c1c; border-color:#fecaca; }
+      .row-actions { display:flex; align-items:center; gap:.35rem; }
+      .action-edit svg, .action-del svg, .plus-icon svg { width:16px; height:16px; }
+      .th-actions { width:64px; }
     </style>
   </head>
   <body class="bg-slate-50 text-slate-800">
@@ -160,7 +164,6 @@
         let sum = +rows.reduce((a,r)=>a+(r.cotizacion_eur||0),0).toFixed(2);
         const delta = +(target - sum).toFixed(2);
         if (delta === 0) return rows;
-        // ajusta la fila con mayor cotización
         let idxMax = -1, maxVal = -Infinity;
         for (let i=0;i<rows.length;i++){
           const v = rows[i].cotizacion_eur ?? -Infinity;
@@ -182,15 +185,17 @@
         const [pdfResumen, setPdfResumen] = useState(null);
 
         // JSON externos
-        const [countries, setCountries] = useState(null);   // { "US": "Estados Unidos", ... }
-        const [sectors, setSectors]   = useState(null);     // { "US92826C8394": "Pagos/Fintech", ... }
+        const [countries, setCountries] = useState(null);
+        const [sectors, setSectors]   = useState(null);
         const [jsonErr, setJsonErr]   = useState('');
 
-        // Modal (alta)
+        // Modal (alta/edición)
         const [modalOpen, setModalOpen] = useState(false);
+        const [modalMode, setModalMode] = useState('add'); // 'add' | 'edit'
         const initialForm = { nombre:'', isin:'', titulos:'', precio_eur:'', cotizacion_eur:'', sector:'', pais:'' };
         const [form, setForm] = useState(initialForm);
         const [formErrors, setFormErrors] = useState({});
+        const [editKey, setEditKey] = useState(null); // usaremos ISIN como clave
 
         useEffect(() => {
           Promise.all([
@@ -242,17 +247,17 @@
             }
             const text = fullText.replace(/\u00A0/g,' ').replace(/\s+\n/g,'\n').replace(/\n{2,}/g,'\n');
 
-            // 1) Parse + 2) Agregar por ISIN
+            // Parse + Agregar
             let data = aggregateByISIN(buildBlocks(text).map(extractFromBlock));
 
-            // 3) Anotar país y sector con los JSON externos
+            // País y sector desde JSON
             data = data.map(r => ({
               ...r,
               pais: countryFromISIN(r.isin),
               sector: sectorFromISIN(r.isin)
             }));
 
-            // 4) Leer resumen y reconciliar SIEMPRE el total al del PDF
+            // Resumen + reconciliar total
             const resumenMatch = text.match(/N[ÚU]MERO\s+DE\s+POSICIONES:\s*(\d+)\s+(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)/i);
             const resumen = resumenMatch ? { count: Number(resumenMatch[1]), total: parseEsNumber(resumenMatch[2]) } : null;
             if (resumen && resumen.total != null){
@@ -278,18 +283,36 @@
           URL.revokeObjectURL(url);
         }
 
-        // ---- Alta manual desde "+"
+        // ---- Alta / Edición ----
         function openAddModal(){
+          setModalMode('add');
+          setEditKey(null);
           setForm(initialForm);
           setFormErrors({});
           setModalOpen(true);
         }
-        function closeModal(){ setModalOpen(false); setForm(initialForm); setFormErrors({}); }
+        function openEditModal(isin){
+          const r = rows.find(x => x.isin === isin);
+          if (!r) return;
+          setModalMode('edit');
+          setEditKey(isin);
+          setForm({
+            nombre: r.nombre || '',
+            isin: r.isin || '',
+            titulos: r.titulos ?? '',
+            precio_eur: r.precio_eur ?? '',
+            cotizacion_eur: r.cotizacion_eur ?? '',
+            sector: r.sector || '',
+            pais: r.pais || ''
+          });
+          setFormErrors({});
+          setModalOpen(true);
+        }
+        function closeModal(){ setModalOpen(false); setForm(initialForm); setFormErrors({}); setEditKey(null); }
 
         function onFormChange(field, value){
           let next = { ...form, [field]: value };
           if (field === 'isin') {
-            // normalizar ISIN y derivar país/sector
             next.isin = (value||'').toUpperCase();
             next.pais = countryFromISIN(next.isin) || '';
             next.sector = sectorFromISIN(next.isin) || '';
@@ -304,21 +327,18 @@
           if (payload.titulos == null || !Number.isFinite(payload.titulos)) errs.titulos = 'Número válido requerido';
           if (payload.precio_eur == null || !Number.isFinite(payload.precio_eur)) errs.precio_eur = 'Número válido requerido';
           if (payload.cotizacion_eur == null || !Number.isFinite(payload.cotizacion_eur)) errs.cotizacion_eur = 'Número válido requerido';
-          // país y sector se derivan; si no existen, también los marcamos
           if (!payload.pais) errs.pais = 'No encontrado en country.json';
           if (!payload.sector) errs.sector = 'No encontrado en sectores.json';
           return errs;
         }
 
         function saveModal(){
-          // Normalizar numéricos obligatorios
           const payload = {
             ...form,
             titulos: parseEsNumber(form.titulos),
             precio_eur: parseEsNumber(form.precio_eur),
             cotizacion_eur: parseEsNumber(form.cotizacion_eur),
           };
-          // Derivar país/sector por si cambia justo al guardar
           payload.pais = countryFromISIN(payload.isin) || '';
           payload.sector = sectorFromISIN(payload.isin) || '';
 
@@ -326,25 +346,26 @@
           setFormErrors(errs);
           if (Object.keys(errs).length) return;
 
-          // Insertar y reagrupar por ISIN
-          const added = aggregateByISIN([...rows, payload]);
-          setRows(added);
+          if (modalMode === 'add'){
+            const added = aggregateByISIN([...rows, payload]);
+            setRows(added);
+          } else {
+            // editar: sustituir por ISIN clave y reagrupar
+            const next = rows.map(r => r.isin === editKey ? payload : r);
+            const regroup = aggregateByISIN(next);
+            setRows(regroup);
+          }
           closeModal();
         }
 
-        function deleteRow(idx){
-          const r = filtered[idx];
-          // eliminar por índice real en rows (por id simple usamos ISIN)
-          const globalIndex = rows.findIndex(x => x.isin === r.isin);
-          if (globalIndex >= 0){
-            const next = rows.slice(0, globalIndex).concat(rows.slice(globalIndex+1));
-            setRows(next);
-          }
+        function deleteRow(isin){
+          const next = rows.filter(x => x.isin !== isin);
+          setRows(next);
         }
 
         return React.createElement('div',{className:'max-w-7xl mx-auto p-4 md:p-8 space-y-6'},
           React.createElement('header',{className:'flex items-center justify-between gap-3 flex-wrap'},
-            React.createElement('h1',{className:'text-2xl md:text-3xl font-bold'},'Invest · Lector de extractos (v3.25)'),
+            React.createElement('h1',{className:'text-2xl md:text-3xl font-bold'},'Invest · Lector de extractos (v3.26)'),
             React.createElement('div',{className:'flex items-center gap-2'},
               React.createElement('span',{className:'badge bg-slate-100 text-slate-700'},'Posiciones: '+totalPosiciones),
               React.createElement('span',{className:'badge bg-slate-100 text-slate-700'},'Valor: '+fmt(totalValor)+' EUR')
@@ -377,9 +398,19 @@
                   ['Nombre','ISIN','Títulos','Precio EUR','Cotización EUR','Sector','País'].map(h =>
                     React.createElement('th',{key:h,className:'px-3 py-2 text-left font-semibold text-slate-600'},h)
                   ),
-                  React.createElement('th',{className:'px-3 py-2 text-left font-semibold text-slate-600 th-actions'},
-                    'Acciones',
-                    React.createElement('button',{title:'Añadir posición', className:'icon-btn', onClick: openAddModal}, '+')
+                  // TH de acciones sin texto, solo "+" agradable
+                  React.createElement('th',{className:'px-3 py-2 text-left th-actions'},
+                    React.createElement('button',{
+                      title:'Añadir posición',
+                      className:'plus-icon icon-circle',
+                      onClick: openAddModal,
+                      'aria-label':'Añadir posición'
+                    }, 
+                      // SVG plus
+                      React.createElement('svg',{viewBox:'0 0 24 24', fill:'none', stroke:'currentColor', 'stroke-width':'2', 'stroke-linecap':'round', 'stroke-linejoin':'round'},
+                        React.createElement('path',{d:'M12 5v14M5 12h14'})
+                      )
+                    )
                   )
                 )
               ),
@@ -394,7 +425,22 @@
                     React.createElement('td',{className:'px-3 py-2'},r.sector||''),
                     React.createElement('td',{className:'px-3 py-2'},r.pais||''),
                     React.createElement('td',{className:'px-3 py-2'},
-                      React.createElement('button',{title:'Eliminar', className:'icon-btn', onClick:function(){ deleteRow(idx); }}, '🗑')
+                      React.createElement('div',{className:'row-actions'},
+                        React.createElement('button',{title:'Editar', className:'icon-btn action-edit', onClick:function(){ openEditModal(r.isin); }, 'aria-label':'Editar'},
+                          React.createElement('svg',{viewBox:'0 0 24 24', fill:'none', stroke:'currentColor', 'stroke-width':'2', 'stroke-linecap':'round', 'stroke-linejoin':'round'},
+                            React.createElement('path',{d:'M12 20h9'}),
+                            React.createElement('path',{d:'M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z'})
+                          )
+                        ),
+                        React.createElement('button',{title:'Eliminar', className:'icon-btn action-del', onClick:function(){ if(confirm('¿Eliminar esta posición?')) deleteRow(r.isin); }, 'aria-label':'Eliminar'},
+                          React.createElement('svg',{viewBox:'0 0 24 24', fill:'none', stroke:'currentColor', 'stroke-width':'2', 'stroke-linecap':'round', 'stroke-linejoin':'round'},
+                            React.createElement('polyline',{points:'3 6 5 6 21 6'}),
+                            React.createElement('path',{d:'M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6'}),
+                            React.createElement('path',{d:'M10 11v6M14 11v6'}),
+                            React.createElement('path',{d:'M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2'})
+                          )
+                        )
+                      )
                     )
                   )
                 )
@@ -412,12 +458,12 @@
               )
             )
           ),
-          // ---- Modal de Alta (todos los campos obligatorios) ----
+          // ---- Modal (Añadir / Editar) ----
           modalOpen ? React.createElement('div',{className:'modal-backdrop', onClick: function(e){ if (e.target === e.currentTarget) closeModal(); }},
             React.createElement('div',{className:'modal-card', onClick: function(e){ e.stopPropagation(); }},
               React.createElement('div',{className:'modal-header'},
-                React.createElement('div', {className:'font-semibold'}, 'Añadir posición manual'),
-                React.createElement('button',{className:'icon-btn', onClick: closeModal}, '✕')
+                React.createElement('div', {className:'font-semibold'}, modalMode==='add' ? 'Añadir posición manual' : 'Editar posición'),
+                React.createElement('button',{className:'icon-btn', onClick: closeModal, 'aria-label':'Cerrar'}, '✕')
               ),
               React.createElement('div',{className:'modal-body space-y-3'},
                 React.createElement('div', null,
@@ -463,7 +509,7 @@
               ),
               React.createElement('div',{className:'modal-footer'},
                 React.createElement('button',{className:'btn', onClick: closeModal},'Cancelar'),
-                React.createElement('button',{className:'btn-primary', onClick: saveModal}, 'Añadir')
+                React.createElement('button',{className:'btn-primary', onClick: saveModal}, modalMode==='add' ? 'Añadir' : 'Guardar')
               )
             )
           ) : null
