@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Invest | Lector PDF cartera (v3.18 — sectores 100%, overrides y exportación)</title>
+    <title>Invest | Lector PDF cartera (v3.21 — fix último ISIN + país completo + agregación por ISIN)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -15,221 +15,299 @@
       .mono { font-variant-numeric: tabular-nums; }
       .badge { display:inline-flex; align-items:center; gap:.5rem; padding:.125rem .5rem; border-radius:.5rem; font-size:.75rem; }
       table thead th { position: sticky; top: 0; background: #f1f5f9; }
-      .chip { padding: .125rem .5rem; border-radius: .5rem; font-size: .75rem; }
     </style>
   </head>
   <body class="bg-slate-50 text-slate-800">
     <div id="root"></div>
+
     <script>
       'use strict';
-      // ===== Utilidades =====
-      function parseEsNumber(s){ if (s == null) return null; s = (''+s).replace(/\./g,'').replace(/,/g,'.').replace(/\s/g,''); var v = Number(s); return Number.isFinite(v) ? v : null; }
+
+      // ===== Utils =====
+      function parseEsNumber(s){ if (s == null) return null; s = (''+s).replace(/\./g,'').replace(/,/g,'.').replace(/\s/g,''); const v = Number(s); return Number.isFinite(v) ? v : null; }
       function fmt(n){ return n != null ? n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''; }
-      function saveFile(name, text){ var blob=new Blob([text],{type:'application/octet-stream'}); var url=URL.createObjectURL(blob); var a=document.createElement('a'); a.href=url; a.download=name; a.click(); setTimeout(function(){ URL.revokeObjectURL(url); }, 500); }
+      function round2(n){ return n==null?null:+(Math.round(n*100)/100).toFixed(2); }
 
-      // ===== Región por ISIN =====
-      function regionFromISIN(isin){ var m = (isin||'').match(/^([A-Z]{2})/); var cc = m ? m[1] : null; if (!cc) return { region:null };
-        var EUROPE = new Set(['AT','BE','BG','CH','CY','CZ','DE','DK','EE','ES','FI','FR','GB','GG','GI','GR','HR','HU','IE','IM','IS','IT','JE','LI','LT','LU','LV','MC','MT','NL','NO','PL','PT','RO','RS','SE','SI','SK','SM','UA']);
-        var ASIA = new Set(['AE','BH','BN','CN','HK','ID','IL','IN','IQ','IR','JP','JO','KH','KR','KW','KZ','LB','MO','MM','MN','MY','NP','OM','PH','PK','QA','SA','SG','TH','TJ','TM','TR','TW','UZ','VN']);
-        if (cc==='US') return { region:'EEUU' }; if (EUROPE.has(cc)) return { region:'Europa' }; if (ASIA.has(cc)) return { region:'Asia' }; return { region:cc } }
-
-      // ===== Nombre (solo primera línea útil) =====
-      function cleanNameBlock(block){ if (!block) return '';
-        var lines = String(block).split(/\n+/).map(function(s){ return s.replace(/\s{2,}/g,' ').trim(); }).filter(Boolean);
-        var headerRe = /(VALOR NOMINAL|NOMBRE DEL VALOR|PRECIO POR T[ÍI]TULO|COTIZACI[ÓO]N EN EUR|PA[ÍI]S DE CUSTODIA|TRADE REPUBLIC|EXTRACTO|CUENTA DE VALORES|RESUMEN|IBAN|BIC|DEP[ÓO]SITO)/i;
-        lines = lines.filter(function(l){ return !headerRe.test(l) && !/t[íi]t\.?/i.test(l); });
-        if (!lines.length) return '';
-        var line = lines[0];
-        line = line.replace(/^\d[\d\.,]*\s*t[íi]t\.?\s*/i,'');
-        line = line.split(/ISIN\s*:/i)[0].trim();
-        var qual = /\b(Registered|Actions?|Acciones?|Shares?|Shs|ADR|ADS|Ord\.?|Bearer|Nominative|EO\b|DL\b|Class|Serie|Series|Port\.?|Nominal)\b/i;
-        var qm = qual.exec(line); if (qm) line = line.slice(0, qm.index).trim();
-        line = line.replace(/[·•\-–—,:;]+$/,'').trim();
-        return line; }
-
-      // ===== Sector (ISIN -> sector, luego nombre -> sector, fallback 'Por clasificar') =====
-      // Base ampliable. Añade aquí tus valores más frecuentes.
-      var SECTOR_DICT_BASE = {
-        // España
-        'ES0109260531': 'Telecomunicaciones/Ingeniería', // Amper
-        'ES0140609019': 'Banca', // Santander
-        'ES0113900J37': 'Banca', // BBVA
-        'ES0173516115': 'Energía (Oil & Gas)', // Repsol
-        // Francia
-        'FR0000120628': 'Seguros', // AXA
-        // Alemania
-        'DE0008404005': 'Aseguradoras', // Allianz
-        'DE0006599905': 'Automoción', // Daimler/Mercedes-Benz
-        // EEUU Pagos/Fintech
-        'US92826C8394': 'Pagos/Fintech', // Visa A
-        'US57636Q1040': 'Pagos/Fintech', // Mastercard A
-        'US70450Y1038': 'Pagos/Fintech', // PayPal
-        'US8522341036': 'Pagos/Fintech', // Block (Square)
-        'US3377381088': 'Pagos/Fintech', // Fiserv
-        'US37940X1028': 'Pagos/Fintech', // Global Payments
-        // Tech
-        'US30212P3038': 'Tecnología', // Meta
-        'US5949181045': 'Tecnología', // Microsoft
-        'US0231351067': 'Tecnología', // Amazon
-        'US30303M1027': 'Tecnología (Redes Sociales)', // Meta (antiguo), mantener por compat
-        'US88160R1014': 'Tecnología (Semiconductores)', // NVIDIA
-        'US67066G1040': 'Semiconductores', // NXP
-        'NL0010273215': 'Semiconductores', // ASML
-        // Salud
-        'US4781601046': 'Salud', // Johnson & Johnson
-        'US09062X1037': 'Salud', // Biogen
-        // Consumo defensivo
-        'US7134481081': 'Bebidas (Consumo defensivo)', // Pepsi
-        'US1912161007': 'Bebidas (Consumo defensivo)', // KO
-        'US7181721090': 'Tabaco', // Altria
-        // Energía
-        'US30231G1022': 'Energía (Petróleo y Gas)', // Exxon
-        'US1667641005': 'Energía (Petróleo y Gas)', // Chevron
-        // REIT
-        'US0084921008': 'REIT (Retail)',
-        'US7561091049': 'REIT (Diversificado)',
-        // Varios
-        'BMG9456A1009': 'Energía/Transporte (GNL)' // Golar LNG
+      // ===== País (nombre completo) y Región por ISIN =====
+      const ISIN_COUNTRY_NAME = {
+        US:'Estados Unidos', CA:'Canadá', MX:'México', BR:'Brasil', AR:'Argentina', CL:'Chile', PE:'Perú', CO:'Colombia',
+        BM:'Bermudas', KY:'Islas Caimán', VG:'Islas Vírgenes Británicas',
+        GB:'Reino Unido', IE:'Irlanda', FR:'Francia', DE:'Alemania', ES:'España', PT:'Portugal', IT:'Italia', NL:'Países Bajos',
+        BE:'Bélgica', LU:'Luxemburgo', CH:'Suiza', AT:'Austria', DK:'Dinamarca', SE:'Suecia', FI:'Finlandia', NO:'Noruega', IS:'Islandia',
+        PL:'Polonia', CZ:'Chequia', SK:'Eslovaquia', HU:'Hungría', RO:'Rumanía', BG:'Bulgaria', EE:'Estonia', LV:'Letonia',
+        LT:'Lituania', SI:'Eslovenia', HR:'Croacia', GR:'Grecia', CY:'Chipre', MT:'Malta', MC:'Mónaco', GI:'Gibraltar',
+        GG:'Guernesey', JE:'Jersey', IM:'Isla de Man', LI:'Liechtenstein', UA:'Ucrania', RS:'Serbia', SM:'San Marino',
+        RU:'Rusia', TR:'Turquía',
+        IL:'Israel', AE:'Emiratos Árabes Unidos', SA:'Arabia Saudí', QA:'Catar', KW:'Kuwait', OM:'Omán', BH:'Baréin', JO:'Jordania',
+        CN:'China', HK:'Hong Kong', MO:'Macao', JP:'Japón', KR:'Corea del Sur', TW:'Taiwán', SG:'Singapur', MY:'Malasia',
+        TH:'Tailandia', PH:'Filipinas', ID:'Indonesia', VN:'Vietnam', IN:'India', PK:'Pakistán', KZ:'Kazajistán',
+        AU:'Australia', NZ:'Nueva Zelanda', ZA:'Sudáfrica', EG:'Egipto', MA:'Marruecos', NG:'Nigeria', MU:'Mauricio',
+        XS:'Internacional (Euroclear/Clearstream)'
       };
-      var SECTOR_LS_KEY = 'sectorOverridesV1';
-      function loadSectorOverrides(){ try { var raw = localStorage.getItem(SECTOR_LS_KEY); return raw ? JSON.parse(raw) : {}; } catch(e){ return {}; } }
-      function saveSectorOverrides(obj){ try { localStorage.setItem(SECTOR_LS_KEY, JSON.stringify(obj, null, 2)); } catch(e){} }
-      function inferSectorByName(name){
-        var n = (name||'').toLowerCase();
-        if (/\bvisa\b/.test(n) || /mastercard/.test(n) || /paypal/.test(n) || /\bblock\b/.test(n) || /\bsquare\b/.test(n)) return 'Pagos/Fintech';
-        if (/amper\b/.test(n) || /telecom|telef|infraestructura|ingenier[ií]a/.test(n)) return 'Telecomunicaciones/Ingeniería';
-        if (/bank|banco|banc|financial|financiera/.test(n)) return 'Banca';
-        if (/insurance|asegur|mutu[a|o]/.test(n)) return 'Seguros';
-        if (/oil|petrol|energy|energ|gas/.test(n)) return 'Energía (Petróleo y Gas)';
-        if (/semiconductor|chip|wafer|foundry/.test(n)) return 'Semiconductores';
-        if (/reit/.test(n)) return 'REIT';
-        if (/pharma|health|salud|biotech/.test(n)) return 'Salud';
-        if (/beverage|bev|drink|bebidas|food|alimenta/.test(n)) return 'Consumo defensivo';
-        if (/automotive|auto|motor|bmw|mercedes|daimler|tesla/.test(n)) return 'Automoción';
-        if (/utilities|utility|energ[íi]a el[ée]ctrica|gas natural/.test(n)) return 'Utilities';
-        return '';
+      const EUROPE = new Set(['AT','BE','BG','CH','CY','CZ','DE','DK','EE','ES','FI','FR','GB','GG','GI','GR','HR','HU','IE','IM','IS','IT','JE','LI','LT','LU','LV','MC','MT','NL','NO','PL','PT','RO','RS','SE','SI','SK','SM','UA']);
+      const ASIA = new Set(['AE','BH','BN','CN','HK','ID','IL','IN','IQ','IR','JP','JO','KH','KR','KW','KZ','LB','MO','MM','MN','MY','NP','OM','PH','PK','QA','SA','SG','TH','TJ','TM','TR','TW','UZ','VN']);
+
+      function regionCountryFromISIN(isin){
+        const m=(isin||'').match(/^([A-Z]{2})/);
+        const cc=m?m[1]:null;
+        const pais = cc? (ISIN_COUNTRY_NAME[cc]||cc):null;
+        let region=null;
+        if (!cc) return {region:null, pais:null};
+        if (cc==='US') region='EEUU';
+        else if (EUROPE.has(cc)) region='Europa';
+        else if (ASIA.has(cc)) region='Asia';
+        return { region, pais };
       }
-      function resolveSector(name, isin, overrides, base){
-        if (overrides && overrides[isin]) return overrides[isin];
-        if (base && base[isin]) return base[isin];
-        var byName = inferSectorByName(name);
-        return byName || 'Por clasificar';
+      function regionOrCountry(isin){ const rc = regionCountryFromISIN(isin); return rc.region || rc.pais || ''; }
+
+      // ===== Nombre (solo 1ª línea útil) =====
+      function cleanNameBlock(block){
+        if (!block) return '';
+        let lines=String(block).split(/\n+/).map(s=>s.replace(/\s{2,}/g,' ').trim()).filter(Boolean);
+        const headerRe=/(VALOR NOMINAL|NOMBRE DEL VALOR|PRECIO POR T[ÍI]TULO|COTIZACI[ÓO]N EN EUR|PA[ÍI]S DE CUSTODIA|TRADE REPUBLIC|EXTRACTO|CUENTA DE VALORES|RESUMEN|IBAN|BIC|DEP[ÓO]SITO)/i;
+        lines=lines.filter(l=>!headerRe.test(l)&&!/t[íi]t\.?/i.test(l));
+        if(!lines.length) return '';
+        let line=lines[0];
+        line=line.replace(/^\d[\d\.,]*\s*t[íi]t\.?\s*/i,'');
+        line=line.split(/ISIN\s*:/i)[0].trim();
+        const qual=/\b(Registered|Actions?|Acciones?|Shares?|Shs|ADR|ADS|Ord\.?|Bearer|Nominative|EO\b|DL\b|Class|Serie|Series|Port\.?|Nominal)\b/i;
+        const qm=qual.exec(line); if(qm) line=line.slice(0,qm.index).trim();
+        line=line.replace(/[·•\-–—,:;]+$/,'').trim();
+        return line;
       }
 
-      // ===== Bloques por ISIN =====
-      function buildBlocks(text){ var re = /ISIN\s*:?[^A-Z0-9]*([A-Z0-9]{12})/gi; var matches = []; var m; while ((m = re.exec(text)) !== null) matches.push({ start: m.index, isin: m[1].toUpperCase() }); var blocks = []; for (var i=0;i<matches.length;i++){ var cur = matches[i]; var nextStart = (i+1 < matches.length) ? matches[i+1].start : text.length; var pre = text.slice(Math.max(0, cur.start - 600), cur.start); var post = text.slice(cur.start, nextStart); blocks.push({ pre: pre, post: post, isin: cur.isin }); } return blocks; }
-      function firstPrecio(post){ var m = /\n(\d{1,4}[\.,]\d{2})\b/.exec(post); return m ? { value: parseEsNumber(m[1]), index: m.index + m[0].length } : { value: null, index: -1 }; }
-      function firstImporteEurAfter(post, startIdx){ if (startIdx < 0) return null; var ventana = post.slice(startIdx, startIdx + 500); var m = /(\d{1,3}(?:\.\d{3})*(?:,\d{2}))\s*EUR/i.exec(ventana); return m ? parseEsNumber(m[1]) : null; }
-      function extractFromBlock(obj){ var pre=obj.pre, post=obj.post, isin=obj.isin; var titMatchAll = pre.match(/([0-9][\d\.,]*)\s*t[íi]t\.?/gi); var titMatch = null; if (titMatchAll && titMatchAll.length){ var last = titMatchAll[titMatchAll.length-1]; var numM = /([0-9][\d\.,]*)/i.exec(last); titMatch = numM; } var titulos = titMatch ? parseEsNumber(titMatch[1]) : null; if (titulos != null && titulos >= 1000000) titulos = null; var nombreRaw = titMatch ? pre.slice(pre.lastIndexOf(titMatch[1]) + titMatch[1].length) : pre.split(/\n/).slice(-5).join('\n'); var nombre = cleanNameBlock(nombreRaw); var precioObj = firstPrecio(post); var precio = precioObj.value; var precioIdx = precioObj.index; var cotizacion_eur = firstImporteEurAfter(post, precioIdx); if (cotizacion_eur == null && precio != null && titulos != null) cotizacion_eur = +(precio * titulos).toFixed(2); if (precio != null && titulos != null && cotizacion_eur != null){ var approx = +(precio * titulos).toFixed(2); if (cotizacion_eur > approx * 1.5) cotizacion_eur = approx; } var rr = regionFromISIN(isin); return { nombre: nombre, isin: isin, titulos: titulos, precio_eur: precio, cotizacion_eur: cotizacion_eur, region: rr.region || '', source: 'block' }; }
+      // ===== Sector (base + heurística) =====
+      const SECTOR_DICT = {
+        'ES0109260531':'Telecomunicaciones/Ingeniería','ES0140609019':'Banca','ES0113900J37':'Banca','ES0173516115':'Energía (Oil & Gas)',
+        'FR0000120628':'Seguros',
+        'DE0008404005':'Seguros','DE0006599905':'Automoción',
+        'US92826C8394':'Pagos/Fintech','US57636Q1040':'Pagos/Fintech','US70450Y1038':'Pagos/Fintech','US8522341036':'Pagos/Fintech','US3377381088':'Pagos/Fintech','US37940X1028':'Pagos/Fintech',
+        'US30231G1022':'Energía (Petróleo y Gas)','US1667641005':'Energía (Petróleo y Gas)','GB00BP6MXD84':'Energía (Oil & Gas)',
+        'NL0010273215':'Semiconductores','US67066G1040':'Semiconductores','US88160R1014':'Semiconductores','US5949181045':'Tecnología','US0231351067':'Tecnología',
+        'US0084921008':'REIT (Retail)','US7561091049':'REIT (Diversificado)',
+        'BMG9456A1009':'Energía/Transporte (GNL)'
+      };
+      function sectorFromNameOrISIN(name, isin){
+        if (SECTOR_DICT[isin]) return SECTOR_DICT[isin];
+        const n=(name||'').toLowerCase();
+        if(/\bvisa\b|mastercard|paypal|\bblock\b|\bsquare\b|global payments|fiserv/.test(n)) return 'Pagos/Fintech';
+        if(/amper|telecom|telef|infraestructura|ingenier[ií]a/.test(n)) return 'Telecomunicaciones/Ingeniería';
+        if(/bank|banco|banc|financial|financier/.test(n)) return 'Banca';
+        if(/insurance|asegur|mutu/.test(n)) return 'Seguros';
+        if(/oil|petrol|energy|energ|gas/.test(n)) return 'Energía (Petróleo y Gas)';
+        if(/semiconductor|chip|wafer|foundry/.test(n)) return 'Semiconductores';
+        if(/pharma|health|salud|biotech/.test(n)) return 'Salud';
+        if(/beverage|bebidas|drink|food|alimenta/.test(n)) return 'Consumo defensivo';
+        if(/auto|motor|automotive|bmw|mercedes|daimler|tesla/.test(n)) return 'Automoción';
+        if(/reit/.test(n)) return 'REIT';
+        return 'Por clasificar';
+      }
+
+      // ===== Bloques por ISIN (corta posibles resúmenes del último bloque) =====
+      function buildBlocks(text){
+        const re=/ISIN\s*:?[^A-Z0-9]*([A-Z0-9]{12})/gi;
+        const matches=[]; let m;
+        while((m=re.exec(text))!==null) matches.push({start:m.index, isin:m[1].toUpperCase()});
+        const blocks=[];
+        for(let i=0;i<matches.length;i++){
+          const cur=matches[i];
+          const nextStart=(i+1<matches.length)?matches[i+1].start:text.length;
+          const pre=text.slice(Math.max(0,cur.start-600),cur.start);
+          let post=text.slice(cur.start,nextStart);
+          if (i === matches.length - 1) {
+            post = post.replace(/N[ÚU]MERO\s+DE\s+POSICIONES[\s\S]*$/i, '');
+            post = post.replace(/RESUMEN[\s\S]*$/i, '');
+            post = post.replace(/TOTAL[\s\S]*$/i, '');
+          }
+          blocks.push({pre, post, isin:cur.isin});
+        }
+        return blocks;
+      }
+
+      // ===== Extracción de COTIZACIÓN EN EUR solo cerca del precio y con "EUR" =====
+      function extractCotizacionEUR(post){
+        const precioM = /\n(\d{1,4}[\.,]\d{2})\b/.exec(post);
+        if (!precioM) return null;
+        const start = precioM.index + precioM[0].length;
+        const ventana = post.slice(start, start + 200);
+        const m = ventana.match(/(\d{1,3}(?:\.\d{3})*(?:,\d{2}))\s*EUR/i);
+        return m ? parseEsNumber(m[1]) : null;
+      }
+
+      // ===== Parseo de un bloque =====
+      function extractFromBlock(obj){
+        const { pre, post, isin } = obj;
+
+        const titMatchAll = pre.match(/([0-9][\d\.,]*)\s*t[íi]t\.?/gi);
+        let titulos = null, lastTitNum = null;
+        if (titMatchAll && titMatchAll.length){
+          const last=titMatchAll[titMatchAll.length-1];
+          const numM=/([0-9][\d\.,]*)/i.exec(last);
+          titulos = numM ? parseEsNumber(numM[1]) : null;
+          lastTitNum = numM ? numM[1] : null;
+          if (titulos!=null && titulos>=1000000) titulos=null;
+        }
+
+        const nombreRaw = (lastTitNum!=null)
+          ? pre.slice(pre.lastIndexOf(lastTitNum) + lastTitNum.length)
+          : pre.split(/\n/).slice(-5).join('\n');
+        const nombre = cleanNameBlock(nombreRaw);
+
+        const precioM = /\n(\d{1,4}[\.,]\d{2})\b/.exec(post);
+        const precio = precioM ? parseEsNumber(precioM[1]) : null;
+
+        let cotizacion_eur = (precio!=null && titulos!=null) ? round2(precio * titulos) : null;
+        const eurCercano = extractCotizacionEUR(post);
+        if (eurCercano != null && cotizacion_eur != null && Math.abs(eurCercano - cotizacion_eur) <= 1.00) {
+          cotizacion_eur = eurCercano;
+        }
+
+        return {
+          nombre,
+          isin,
+          titulos,
+          precio_eur: precio,
+          cotizacion_eur,
+          sector: sectorFromNameOrISIN(nombre, isin),
+          region: regionOrCountry(isin),
+          source: 'block'
+        };
+      }
+
+      // ===== Agregación por ISIN (suma títulos y cotización; precio = media ponderada si hay títulos) =====
+      function aggregateByISIN(rows){
+        const map = new Map();
+        for (const r of rows){
+          const k = r.isin || '';
+          if (!map.has(k)){
+            map.set(k, { ...r });
+          } else {
+            const acc = map.get(k);
+            const t1 = acc.titulos || 0, t2 = r.titulos || 0;
+            const v1 = acc.cotizacion_eur || 0, v2 = r.cotizacion_eur || 0;
+            const p1 = acc.precio_eur, p2 = r.precio_eur;
+
+            acc.titulos = (t1 || t2) ? round2(t1 + t2) : (t1 || t2 || null);
+            acc.cotizacion_eur = round2(v1 + v2);
+
+            if ((t1 + t2) > 0 && (p1 != null || p2 != null)){
+              const w1 = (p1!=null ? p1*t1 : 0), w2 = (p2!=null ? p2*t2 : 0);
+              const denom = t1 + t2;
+              acc.precio_eur = denom > 0 ? round2((w1 + w2) / denom) : (p1 ?? p2 ?? null);
+            } else {
+              acc.precio_eur = p1 ?? p2 ?? null;
+            }
+
+            acc.source = (acc.source||'') + '+agg';
+            // nombre/sector/region se mantienen del primero
+          }
+        }
+        return Array.from(map.values());
+      }
 
       // ===== React App =====
-      var useState = React.useState, useMemo = React.useMemo, useEffect = React.useEffect;
+      const { useState, useMemo } = React;
       function App(){
-        var _a = useState([]), rows = _a[0], setRows = _a[1];
-        var _b = useState(false), loading = _b[0], setLoading = _b[1];
-        var _c = useState(''), error = _c[0], setError = _c[1];
-        var _d = useState(''), filter = _d[0], setFilter = _d[1];
-        var _e = useState(null), pdfResumen = _e[0], setPdfResumen = _e[1];
-        var _f = useState(loadSectorOverrides()), sectorOverrides = _f[0], setSectorOverrides = _f[1];
+        const [rows, setRows] = useState([]);
+        const [loading, setLoading] = useState(false);
+        const [error, setError] = useState('');
+        const [filter, setFilter] = useState('');
+        const [pdfResumen, setPdfResumen] = useState(null);
 
-        // Deriva sector final para cada fila
-        var resolvedRows = useMemo(function(){
-          return rows.map(function(r){
-            var sector = resolveSector(r.nombre, r.isin, sectorOverrides, SECTOR_DICT_BASE);
-            return Object.assign({}, r, { sector: sector });
-          });
-        }, [rows, sectorOverrides]);
+        const filtered = useMemo(() => {
+          const q=(filter||'').toLowerCase();
+          return rows.filter(r =>
+            !q ||
+            (r.nombre||'').toLowerCase().includes(q) ||
+            (r.isin||'').toLowerCase().includes(q) ||
+            (r.region||'').toLowerCase().includes(q) ||
+            (r.sector||'').toLowerCase().includes(q)
+          );
+        }, [rows, filter]);
 
-        var filtered = useMemo(function(){
-          var q=(filter||'').toLowerCase();
-          return resolvedRows.filter(function(r){ return !q || (r.nombre||'').toLowerCase().includes(q) || (r.isin||'').toLowerCase().includes(q) || (r.sector||'').toLowerCase().includes(q); });
-        },[resolvedRows,filter]);
-
-        var totalValor=useMemo(function(){ return +filtered.reduce(function(a,r){ return a+(r.cotizacion_eur||0); },0).toFixed(2); },[filtered]);
-        var totalPosiciones = filtered.length;
-
-        // Falta de sector -> panel de completar
-        var missing = useMemo(function(){ return resolvedRows.filter(function(r){ return (r.sector||'') === 'Por clasificar'; }); }, [resolvedRows]);
-
-        useEffect(function(){ saveSectorOverrides(sectorOverrides); }, [sectorOverrides]);
+        const totalValor = useMemo(() => +filtered.reduce((a,r)=>a+(r.cotizacion_eur||0),0).toFixed(2), [filtered]);
+        const totalPosiciones = filtered.length;
 
         async function onFile(file){
           setError(''); setLoading(true);
-          try{
-            var pdfData=new Uint8Array(await file.arrayBuffer());
-            var pdf=await pdfjsLib.getDocument({ data: pdfData }).promise;
-            var fullText='';
-            for (var i=1;i<=pdf.numPages;i++){
-              var page=await pdf.getPage(i);
-              var content=await page.getTextContent();
-              var pageText=content.items.map(function(it){ return it.str; }).join('\n');
-              fullText+='\n'+pageText+'\n';
+          try {
+            const pdfData=new Uint8Array(await file.arrayBuffer());
+            const pdf=await pdfjsLib.getDocument({data:pdfData}).promise;
+            let fullText='';
+            for(let i=1;i<=pdf.numPages;i++){
+              const page=await pdf.getPage(i);
+              const content=await page.getTextContent();
+              const pageText=content.items.map(it=>it.str).join('\n');
+              fullText += '\n' + pageText + '\n';
             }
-            var text=fullText.replace(/\u00A0/g,' ').replace(/\s+\n/g,'\n').replace(/\n{2,}/g,'\n');
-            var data=buildBlocks(text).map(extractFromBlock);
-            var resumenMatch=text.match(/N[ÚU]MERO\s+DE\s+POSICIONES:\s*(\d+)\s+(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)/i);
-            var resumen=resumenMatch?{ count:Number(resumenMatch[1]), total:parseEsNumber(resumenMatch[2]) }:null;
-            setRows(data); setPdfResumen(resumen);
-            if(resumen){
-              var sum=+data.reduce(function(a,r){ return a+(r.cotizacion_eur||0); },0).toFixed(2);
-              if(resumen.count!==data.length || sum!==+(resumen.total.toFixed(2))){
-                setError('Aviso: el PDF dice '+resumen.count+' posiciones y '+fmt(resumen.total)+' EUR. Hemos leído '+data.length+' y '+fmt(sum)+' EUR.');
+            const text = fullText.replace(/\u00A0/g,' ').replace(/\s+\n/g,'\n').replace(/\n{2,}/g,'\n');
+
+            // 1) Parsear bloques
+            const parsed = buildBlocks(text).map(extractFromBlock);
+
+            // 2) Agregar por ISIN
+            let data = aggregateByISIN(parsed);
+
+            // 3) Resumen del PDF y reconciliación suave
+            const resumenMatch = text.match(/N[ÚU]MERO\s+DE\s+POSICIONES:\s*(\d+)\s+(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)/i);
+            const resumen = resumenMatch ? { count: Number(resumenMatch[1]), total: parseEsNumber(resumenMatch[2]) } : null;
+
+            if (resumen){
+              let sum = +data.reduce((a,r)=>a+(r.cotizacion_eur||0),0).toFixed(2);
+              const target = +(resumen.total||0).toFixed(2);
+              const delta = +(target - sum).toFixed(2);
+              const threshold = Math.max(target*0.005, 2); // 0.5% o 2 EUR
+              if (delta !== 0 && Math.abs(delta) <= threshold){
+                let idxMax = -1; let maxVal = -Infinity;
+                for (let i=0;i<data.length;i++){ const v=data[i].cotizacion_eur||0; if (v>maxVal){ maxVal=v; idxMax=i; } }
+                if (idxMax>=0){ data[idxMax].cotizacion_eur = round2((data[idxMax].cotizacion_eur||0) + delta); data[idxMax].source += '+reconc'; }
+              }
+              const finalSum = +data.reduce((a,r)=>a+(r.cotizacion_eur||0),0).toFixed(2);
+              if (finalSum !== target){
+                setError(`Aviso: el PDF dice ${resumen.count} posiciones y ${fmt(target)} EUR. Hemos leído ${data.length} y ${fmt(finalSum)} EUR.`);
               }
             }
-          }catch(e){ setError('No se pudo leer el PDF. Asegúrate de subir el extracto original (ES).'); }
-          finally{ setLoading(false); }
-        }
 
-        function onExportSectores(){
-          var payload = JSON.stringify(sectorOverrides, null, 2);
-          saveFile('sectores.json', payload);
-        }
-        function onImportSectores(file){
-          var reader = new FileReader();
-          reader.onload = function(){ try{ var obj = JSON.parse(String(reader.result||'{}')); setSectorOverrides(obj); } catch(e){ alert('JSON inválido'); } };
-          reader.readAsText(file);
-        }
-        function onResetSectores(){
-          if (confirm('¿Seguro que quieres borrar tus overrides de sectores?')){
-            setSectorOverrides({}); localStorage.removeItem(SECTOR_LS_KEY);
-          }
-        }
-        function setSector(isin, sector){
-          setSectorOverrides(Object.assign({}, sectorOverrides, (function(){ var x={}; x[isin]=sector; return x; })()));
+            setRows(data); setPdfResumen(resumen);
+          } catch(e){
+            setError('No se pudo leer el PDF. Asegúrate de subir el extracto original (ES).');
+          } finally { setLoading(false); }
         }
 
         function exportCSV(){
-          var csv=Papa.unparse(filtered.map(function(r){ return { nombre:r.nombre, isin:r.isin, titulos:r.titulos, precio_eur:r.precio_eur, cotizacion_eur:r.cotizacion_eur, sector:r.sector, region:r.region, source:r.source }; }),{ delimiter:';' });
-          saveFile('cartera_export.csv', csv);
+          const csv = Papa.unparse(filtered.map(r => ({
+            nombre:r.nombre, isin:r.isin, titulos:r.titulos, precio_eur:r.precio_eur,
+            cotizacion_eur:r.cotizacion_eur, sector:r.sector, pais_region:r.region, source:r.source
+          })), { delimiter:';' });
+          const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+          const url=URL.createObjectURL(blob);
+          const a=document.createElement('a');
+          a.href=url; a.download='cartera_export.csv'; a.click();
+          URL.revokeObjectURL(url);
         }
 
         return React.createElement('div',{className:'max-w-7xl mx-auto p-4 md:p-8 space-y-6'},
           React.createElement('header',{className:'flex items-center justify-between gap-3 flex-wrap'},
-            React.createElement('h1',{className:'text-2xl md:text-3xl font-bold'},'Invest · Lector de extractos (v3.18)'),
-            React.createElement('div',{className:'flex items-center gap-2'}, 
+            React.createElement('h1',{className:'text-2xl md:text-3xl font-bold'},'Invest · Lector de extractos (v3.21)'),
+            React.createElement('div',{className:'flex items-center gap-2'},
               React.createElement('span',{className:'badge bg-slate-100 text-slate-700'},'Posiciones: '+totalPosiciones),
               React.createElement('span',{className:'badge bg-slate-100 text-slate-700'},'Valor: '+fmt(totalValor)+' EUR')
             ),
             React.createElement('div',{className:'flex items-center gap-2 grow md:grow-0'},
-              React.createElement('button',{onClick:function(){var el=document.getElementById('file'); if(el) el.click();},className:'px-3 py-2 rounded-xl bg-slate-900 text-white shadow hover:opacity-90'},'Subir PDF'),
-              React.createElement('button',{onClick:exportCSV,className:'px-3 py-2 rounded-xl border shadow bg-white'},'Exportar CSV'),
-              React.createElement('button',{onClick:onExportSectores,className:'px-3 py-2 rounded-xl border shadow bg-white'},'Exportar sectores'),
-              React.createElement('label',{className:'px-3 py-2 rounded-xl border shadow bg-white cursor-pointer'},'Importar sectores',
-                React.createElement('input',{type:'file', accept:'.json,application/json', style:{display:'none'}, onChange:function(e){ if(e && e.target && e.target.files && e.target.files[0]) onImportSectores(e.target.files[0]); }})
-              ),
-              React.createElement('button',{onClick:onResetSectores,className:'px-3 py-2 rounded-xl border shadow bg-white'},'Reset sectores')
+              React.createElement('button',{onClick:function(){const el=document.getElementById('file'); if(el) el.click();},className:'px-3 py-2 rounded-xl bg-slate-900 text-white shadow hover:opacity-90'},'Subir PDF'),
+              React.createElement('button',{onClick:exportCSV,className:'px-3 py-2 rounded-2xl border shadow bg-white'},'Exportar CSV')
             )
           ),
           React.createElement('section',{className:'grid md:grid-cols-3 gap-4'},
-            React.createElement('div',{className:'md:col-span-2 p-4 rounded-2xl bg-white shadow'}, 
+            React.createElement('div',{className:'md:col-span-2 p-4 rounded-2xl bg-white shadow'},
               React.createElement('label',{className:'text-sm text-slate-500'},'Sube tu PDF de Trade Republic (ES):'),
               React.createElement('input',{id:'file',type:'file',accept:'application/pdf',style:{display:'none'},onChange:function(e){ if(e&&e.target&&e.target.files&&e.target.files[0]) onFile(e.target.files[0]); }}),
               loading?React.createElement('div',{className:'mt-4 text-sm text-slate-600'},'Leyendo PDF…'):null,
               error?React.createElement('div',{className:'mt-4 text-sm text-red-600'},error):null,
               pdfResumen?React.createElement('div',{className:'mt-2 text-sm text-slate-500'},'Resumen del PDF: '+pdfResumen.count+' posiciones · '+fmt(pdfResumen.total)+' EUR'):null
             ),
-            React.createElement('div',{className:'p-4 rounded-2xl bg-white shadow space-y-3'}, 
-              React.createElement('input',{className:'w-full px-3 py-2 rounded-xl border',placeholder:'Filtrar por nombre, ISIN o sector…',value:filter,onChange:function(e){ setFilter(e.target.value); }}),
+            React.createElement('div',{className:'p-4 rounded-2xl bg-white shadow space-y-3'},
+              React.createElement('input',{className:'w-full px-3 py-2 rounded-xl border',placeholder:'Filtrar por nombre, ISIN, sector o país…',value:filter,onChange:function(e){ setFilter(e.target.value); }}),
               React.createElement('div',{className:'text-sm text-slate-500'},'Filas visibles: '+filtered.length),
               React.createElement('div',{className:'text-sm text-slate-500 mono'},'Total posiciones (visibles): '+totalPosiciones),
               React.createElement('div',{className:'text-sm text-slate-500 mono'},'Total valor (visibles): '+fmt(totalValor)+' EUR')
@@ -238,24 +316,23 @@
           React.createElement('section',{className:'overflow-auto rounded-2xl bg-white shadow'},
             React.createElement('table',{className:'min-w-full text-sm'},
               React.createElement('thead',null,
-                React.createElement('tr',null,['Nombre','ISIN','Títulos','Precio EUR','Cotización EUR','Sector','Región','Origen'].map(function(h){ return React.createElement('th',{key:h,className:'px-3 py-2 text-left font-semibold text-slate-600'},h); }))
+                React.createElement('tr',null,['Nombre','ISIN','Títulos','Precio EUR','Cotización EUR','Sector','País/Región','Origen'].map(h =>
+                  React.createElement('th',{key:h,className:'px-3 py-2 text-left font-semibold text-slate-600'},h)
+                ))
               ),
               React.createElement('tbody',null,
-                filtered.map(function(r,idx){
-                  var sector = r.sector;
-                  return React.createElement('tr',{key:String(idx),className:(idx%2?'bg-slate-50':'')},
+                filtered.map((r,idx) =>
+                  React.createElement('tr',{key:String(idx),className:(idx%2?'bg-slate-50':'')},
                     React.createElement('td',{className:'px-3 py-2'},r.nombre||''),
                     React.createElement('td',{className:'px-3 py-2 mono'},r.isin||''),
                     React.createElement('td',{className:'px-3 py-2 mono'},r.titulos!=null?r.titulos:''),
                     React.createElement('td',{className:'px-3 py-2 mono'},r.precio_eur!=null?fmt(r.precio_eur):''),
                     React.createElement('td',{className:'px-3 py-2 mono'},r.cotizacion_eur!=null?fmt(r.cotizacion_eur):''),
-                    React.createElement('td',{className:'px-3 py-2'}, 
-                      React.createElement('span',{className:'chip '+(sector==='Por clasificar'?'bg-amber-100 text-amber-800':'bg-slate-100 text-slate-700')}, sector || 'Por clasificar')
-                    ),
-                    React.createElement('td',{className:'px-3 py-2'},regionFromISIN(r.isin).region||''),
+                    React.createElement('td',{className:'px-3 py-2'},r.sector||''),
+                    React.createElement('td',{className:'px-3 py-2'},r.region||''),
                     React.createElement('td',{className:'px-3 py-2 mono text-xs text-slate-500'},r.source||'block')
-                  );
-                })
+                  )
+                )
               ),
               React.createElement('tfoot',null,
                 React.createElement('tr',{className:'bg-slate-100 font-semibold'},
@@ -269,23 +346,10 @@
                 )
               )
             )
-          ),
-          missing.length ? React.createElement('section',{className:'p-4 rounded-2xl bg-white shadow space-y-3 mt-4'},
-            React.createElement('div',{className:'font-semibold'},'Completar sectores (', missing.length ,' por clasificar)'),
-            React.createElement('div',{className:'grid md:grid-cols-2 gap-3'}, 
-              missing.map(function(r,i){
-                return React.createElement('div',{key:r.isin||i, className:'flex items-center gap-2'}, 
-                  React.createElement('div',{className:'flex-1'}, 
-                    React.createElement('div',{className:'text-sm font-medium'}, r.nombre || '(sin nombre)'),
-                    React.createElement('div',{className:'text-xs text-slate-500 mono'}, r.isin )
-                  ),
-                  React.createElement('input',{className:'px-2 py-1 rounded border w-56', placeholder:'Sector…', value: sectorOverrides[r.isin] || '', onChange:function(e){ setSector(r.isin, e.target.value); }})
-                );
-              })
-            )
-          ) : null
+          )
         );
       }
+
       ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
     </script>
   </body>
