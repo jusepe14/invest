@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Invest | Lector PDF cartera (v3.21 — fix último ISIN + país completo + agregación por ISIN)</title>
+    <title>Invest | Lector PDF cartera (v3.22 — agregación, país desde country.json, sector desde sectores.json)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -24,43 +24,16 @@
       'use strict';
 
       // ===== Utils =====
-      function parseEsNumber(s){ if (s == null) return null; s = (''+s).replace(/\./g,'').replace(/,/g,'.').replace(/\s/g,''); const v = Number(s); return Number.isFinite(v) ? v : null; }
-      function fmt(n){ return n != null ? n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''; }
-      function round2(n){ return n==null?null:+(Math.round(n*100)/100).toFixed(2); }
-
-      // ===== País (nombre completo) y Región por ISIN =====
-      const ISIN_COUNTRY_NAME = {
-        US:'Estados Unidos', CA:'Canadá', MX:'México', BR:'Brasil', AR:'Argentina', CL:'Chile', PE:'Perú', CO:'Colombia',
-        BM:'Bermudas', KY:'Islas Caimán', VG:'Islas Vírgenes Británicas',
-        GB:'Reino Unido', IE:'Irlanda', FR:'Francia', DE:'Alemania', ES:'España', PT:'Portugal', IT:'Italia', NL:'Países Bajos',
-        BE:'Bélgica', LU:'Luxemburgo', CH:'Suiza', AT:'Austria', DK:'Dinamarca', SE:'Suecia', FI:'Finlandia', NO:'Noruega', IS:'Islandia',
-        PL:'Polonia', CZ:'Chequia', SK:'Eslovaquia', HU:'Hungría', RO:'Rumanía', BG:'Bulgaria', EE:'Estonia', LV:'Letonia',
-        LT:'Lituania', SI:'Eslovenia', HR:'Croacia', GR:'Grecia', CY:'Chipre', MT:'Malta', MC:'Mónaco', GI:'Gibraltar',
-        GG:'Guernesey', JE:'Jersey', IM:'Isla de Man', LI:'Liechtenstein', UA:'Ucrania', RS:'Serbia', SM:'San Marino',
-        RU:'Rusia', TR:'Turquía',
-        IL:'Israel', AE:'Emiratos Árabes Unidos', SA:'Arabia Saudí', QA:'Catar', KW:'Kuwait', OM:'Omán', BH:'Baréin', JO:'Jordania',
-        CN:'China', HK:'Hong Kong', MO:'Macao', JP:'Japón', KR:'Corea del Sur', TW:'Taiwán', SG:'Singapur', MY:'Malasia',
-        TH:'Tailandia', PH:'Filipinas', ID:'Indonesia', VN:'Vietnam', IN:'India', PK:'Pakistán', KZ:'Kazajistán',
-        AU:'Australia', NZ:'Nueva Zelanda', ZA:'Sudáfrica', EG:'Egipto', MA:'Marruecos', NG:'Nigeria', MU:'Mauricio',
-        XS:'Internacional (Euroclear/Clearstream)'
+      const parseEsNumber = (s) => {
+        if (s == null) return null;
+        s = (''+s).replace(/\./g,'').replace(/,/g,'.').replace(/\s/g,'');
+        const v = Number(s);
+        return Number.isFinite(v) ? v : null;
       };
-      const EUROPE = new Set(['AT','BE','BG','CH','CY','CZ','DE','DK','EE','ES','FI','FR','GB','GG','GI','GR','HR','HU','IE','IM','IS','IT','JE','LI','LT','LU','LV','MC','MT','NL','NO','PL','PT','RO','RS','SE','SI','SK','SM','UA']);
-      const ASIA = new Set(['AE','BH','BN','CN','HK','ID','IL','IN','IQ','IR','JP','JO','KH','KR','KW','KZ','LB','MO','MM','MN','MY','NP','OM','PH','PK','QA','SA','SG','TH','TJ','TM','TR','TW','UZ','VN']);
+      const fmt = (n) => n != null ? n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '';
+      const round2 = (n) => n==null?null:+(Math.round(n*100)/100).toFixed(2);
 
-      function regionCountryFromISIN(isin){
-        const m=(isin||'').match(/^([A-Z]{2})/);
-        const cc=m?m[1]:null;
-        const pais = cc? (ISIN_COUNTRY_NAME[cc]||cc):null;
-        let region=null;
-        if (!cc) return {region:null, pais:null};
-        if (cc==='US') region='EEUU';
-        else if (EUROPE.has(cc)) region='Europa';
-        else if (ASIA.has(cc)) region='Asia';
-        return { region, pais };
-      }
-      function regionOrCountry(isin){ const rc = regionCountryFromISIN(isin); return rc.region || rc.pais || ''; }
-
-      // ===== Nombre (solo 1ª línea útil) =====
+      // ===== Nombre (1ª línea útil) =====
       function cleanNameBlock(block){
         if (!block) return '';
         let lines=String(block).split(/\n+/).map(s=>s.replace(/\s{2,}/g,' ').trim()).filter(Boolean);
@@ -76,34 +49,7 @@
         return line;
       }
 
-      // ===== Sector (base + heurística) =====
-      const SECTOR_DICT = {
-        'ES0109260531':'Telecomunicaciones/Ingeniería','ES0140609019':'Banca','ES0113900J37':'Banca','ES0173516115':'Energía (Oil & Gas)',
-        'FR0000120628':'Seguros',
-        'DE0008404005':'Seguros','DE0006599905':'Automoción',
-        'US92826C8394':'Pagos/Fintech','US57636Q1040':'Pagos/Fintech','US70450Y1038':'Pagos/Fintech','US8522341036':'Pagos/Fintech','US3377381088':'Pagos/Fintech','US37940X1028':'Pagos/Fintech',
-        'US30231G1022':'Energía (Petróleo y Gas)','US1667641005':'Energía (Petróleo y Gas)','GB00BP6MXD84':'Energía (Oil & Gas)',
-        'NL0010273215':'Semiconductores','US67066G1040':'Semiconductores','US88160R1014':'Semiconductores','US5949181045':'Tecnología','US0231351067':'Tecnología',
-        'US0084921008':'REIT (Retail)','US7561091049':'REIT (Diversificado)',
-        'BMG9456A1009':'Energía/Transporte (GNL)'
-      };
-      function sectorFromNameOrISIN(name, isin){
-        if (SECTOR_DICT[isin]) return SECTOR_DICT[isin];
-        const n=(name||'').toLowerCase();
-        if(/\bvisa\b|mastercard|paypal|\bblock\b|\bsquare\b|global payments|fiserv/.test(n)) return 'Pagos/Fintech';
-        if(/amper|telecom|telef|infraestructura|ingenier[ií]a/.test(n)) return 'Telecomunicaciones/Ingeniería';
-        if(/bank|banco|banc|financial|financier/.test(n)) return 'Banca';
-        if(/insurance|asegur|mutu/.test(n)) return 'Seguros';
-        if(/oil|petrol|energy|energ|gas/.test(n)) return 'Energía (Petróleo y Gas)';
-        if(/semiconductor|chip|wafer|foundry/.test(n)) return 'Semiconductores';
-        if(/pharma|health|salud|biotech/.test(n)) return 'Salud';
-        if(/beverage|bebidas|drink|food|alimenta/.test(n)) return 'Consumo defensivo';
-        if(/auto|motor|automotive|bmw|mercedes|daimler|tesla/.test(n)) return 'Automoción';
-        if(/reit/.test(n)) return 'REIT';
-        return 'Por clasificar';
-      }
-
-      // ===== Bloques por ISIN (corta posibles resúmenes del último bloque) =====
+      // ===== Bloques por ISIN (corta resumen en el último) =====
       function buildBlocks(text){
         const re=/ISIN\s*:?[^A-Z0-9]*([A-Z0-9]{12})/gi;
         const matches=[]; let m;
@@ -124,7 +70,7 @@
         return blocks;
       }
 
-      // ===== Extracción de COTIZACIÓN EN EUR solo cerca del precio y con "EUR" =====
+      // ===== Cotización EUR cerca del precio y con "EUR" =====
       function extractCotizacionEUR(post){
         const precioM = /\n(\d{1,4}[\.,]\d{2})\b/.exec(post);
         if (!precioM) return null;
@@ -135,9 +81,7 @@
       }
 
       // ===== Parseo de un bloque =====
-      function extractFromBlock(obj){
-        const { pre, post, isin } = obj;
-
+      function extractFromBlock({pre, post, isin}){
         const titMatchAll = pre.match(/([0-9][\d\.,]*)\s*t[íi]t\.?/gi);
         let titulos = null, lastTitNum = null;
         if (titMatchAll && titMatchAll.length){
@@ -147,7 +91,6 @@
           lastTitNum = numM ? numM[1] : null;
           if (titulos!=null && titulos>=1000000) titulos=null;
         }
-
         const nombreRaw = (lastTitNum!=null)
           ? pre.slice(pre.lastIndexOf(lastTitNum) + lastTitNum.length)
           : pre.split(/\n/).slice(-5).join('\n');
@@ -162,19 +105,10 @@
           cotizacion_eur = eurCercano;
         }
 
-        return {
-          nombre,
-          isin,
-          titulos,
-          precio_eur: precio,
-          cotizacion_eur,
-          sector: sectorFromNameOrISIN(nombre, isin),
-          region: regionOrCountry(isin),
-          source: 'block'
-        };
+        return { nombre, isin, titulos, precio_eur: precio, cotizacion_eur };
       }
 
-      // ===== Agregación por ISIN (suma títulos y cotización; precio = media ponderada si hay títulos) =====
+      // ===== Agregación por ISIN =====
       function aggregateByISIN(rows){
         const map = new Map();
         for (const r of rows){
@@ -197,16 +131,13 @@
             } else {
               acc.precio_eur = p1 ?? p2 ?? null;
             }
-
-            acc.source = (acc.source||'') + '+agg';
-            // nombre/sector/region se mantienen del primero
           }
         }
         return Array.from(map.values());
       }
 
       // ===== React App =====
-      const { useState, useMemo } = React;
+      const { useState, useMemo, useEffect } = React;
       function App(){
         const [rows, setRows] = useState([]);
         const [loading, setLoading] = useState(false);
@@ -214,13 +145,41 @@
         const [filter, setFilter] = useState('');
         const [pdfResumen, setPdfResumen] = useState(null);
 
+        // JSON externos
+        const [countries, setCountries] = useState(null);   // { "US": "Estados Unidos", ... }
+        const [sectors, setSectors]   = useState(null);     // { "US92826C8394": "Pagos/Fintech", ... }
+        const [jsonErr, setJsonErr]   = useState('');
+
+        useEffect(() => {
+          // Carga country.json y sectores.json desde la misma carpeta
+          Promise.all([
+            fetch('country.json').then(r => r.ok ? r.json() : Promise.reject('country.json no encontrado')),
+            fetch('sectores.json').then(r => r.ok ? r.json() : Promise.reject('sectores.json no encontrado')),
+          ]).then(([c,s]) => { setCountries(c); setSectors(s); })
+            .catch(e => setJsonErr(String(e)));
+        }, []);
+
+        // País por ISIN usando country.json
+        const countryFromISIN = (isin) => {
+          if (!countries || !isin) return '';
+          const m = String(isin).match(/^([A-Z]{2})/);
+          const cc = m ? m[1] : null;
+          return cc && countries[cc] ? countries[cc] : (cc || '');
+        };
+
+        // Sector desde sectores.json (sin heurísticas)
+        const sectorFromISIN = (isin) => {
+          if (!sectors || !isin) return '';
+          return sectors[isin] || '';
+        };
+
         const filtered = useMemo(() => {
           const q=(filter||'').toLowerCase();
           return rows.filter(r =>
             !q ||
             (r.nombre||'').toLowerCase().includes(q) ||
             (r.isin||'').toLowerCase().includes(q) ||
-            (r.region||'').toLowerCase().includes(q) ||
+            (r.pais||'').toLowerCase().includes(q) ||
             (r.sector||'').toLowerCase().includes(q)
           );
         }, [rows, filter]);
@@ -242,29 +201,25 @@
             }
             const text = fullText.replace(/\u00A0/g,' ').replace(/\s+\n/g,'\n').replace(/\n{2,}/g,'\n');
 
-            // 1) Parsear bloques
+            // parse + agregar por ISIN
             const parsed = buildBlocks(text).map(extractFromBlock);
-
-            // 2) Agregar por ISIN
             let data = aggregateByISIN(parsed);
 
-            // 3) Resumen del PDF y reconciliación suave
+            // anotar país y sector usando los JSON cargados (si aún no están, quedarán vacíos hasta que carguen)
+            data = data.map(r => ({
+              ...r,
+              pais: countryFromISIN(r.isin),
+              sector: sectorFromISIN(r.isin)
+            }));
+
+            // resumen y aviso
             const resumenMatch = text.match(/N[ÚU]MERO\s+DE\s+POSICIONES:\s*(\d+)\s+(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)/i);
             const resumen = resumenMatch ? { count: Number(resumenMatch[1]), total: parseEsNumber(resumenMatch[2]) } : null;
 
             if (resumen){
-              let sum = +data.reduce((a,r)=>a+(r.cotizacion_eur||0),0).toFixed(2);
-              const target = +(resumen.total||0).toFixed(2);
-              const delta = +(target - sum).toFixed(2);
-              const threshold = Math.max(target*0.005, 2); // 0.5% o 2 EUR
-              if (delta !== 0 && Math.abs(delta) <= threshold){
-                let idxMax = -1; let maxVal = -Infinity;
-                for (let i=0;i<data.length;i++){ const v=data[i].cotizacion_eur||0; if (v>maxVal){ maxVal=v; idxMax=i; } }
-                if (idxMax>=0){ data[idxMax].cotizacion_eur = round2((data[idxMax].cotizacion_eur||0) + delta); data[idxMax].source += '+reconc'; }
-              }
-              const finalSum = +data.reduce((a,r)=>a+(r.cotizacion_eur||0),0).toFixed(2);
-              if (finalSum !== target){
-                setError(`Aviso: el PDF dice ${resumen.count} posiciones y ${fmt(target)} EUR. Hemos leído ${data.length} y ${fmt(finalSum)} EUR.`);
+              const sum = +data.reduce((a,r)=>a+(r.cotizacion_eur||0),0).toFixed(2);
+              if (sum !== +(resumen.total||0).toFixed(2)) {
+                setError(`Aviso: el PDF dice ${resumen.count} posiciones y ${fmt(resumen.total)} EUR. Hemos leído ${data.length} y ${fmt(sum)} EUR.`);
               }
             }
 
@@ -277,7 +232,7 @@
         function exportCSV(){
           const csv = Papa.unparse(filtered.map(r => ({
             nombre:r.nombre, isin:r.isin, titulos:r.titulos, precio_eur:r.precio_eur,
-            cotizacion_eur:r.cotizacion_eur, sector:r.sector, pais_region:r.region, source:r.source
+            cotizacion_eur:r.cotizacion_eur, sector:r.sector, pais:r.pais
           })), { delimiter:';' });
           const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
           const url=URL.createObjectURL(blob);
@@ -288,7 +243,7 @@
 
         return React.createElement('div',{className:'max-w-7xl mx-auto p-4 md:p-8 space-y-6'},
           React.createElement('header',{className:'flex items-center justify-between gap-3 flex-wrap'},
-            React.createElement('h1',{className:'text-2xl md:text-3xl font-bold'},'Invest · Lector de extractos (v3.21)'),
+            React.createElement('h1',{className:'text-2xl md:text-3xl font-bold'},'Invest · Lector de extractos (v3.22)'),
             React.createElement('div',{className:'flex items-center gap-2'},
               React.createElement('span',{className:'badge bg-slate-100 text-slate-700'},'Posiciones: '+totalPosiciones),
               React.createElement('span',{className:'badge bg-slate-100 text-slate-700'},'Valor: '+fmt(totalValor)+' EUR')
@@ -302,6 +257,7 @@
             React.createElement('div',{className:'md:col-span-2 p-4 rounded-2xl bg-white shadow'},
               React.createElement('label',{className:'text-sm text-slate-500'},'Sube tu PDF de Trade Republic (ES):'),
               React.createElement('input',{id:'file',type:'file',accept:'application/pdf',style:{display:'none'},onChange:function(e){ if(e&&e.target&&e.target.files&&e.target.files[0]) onFile(e.target.files[0]); }}),
+              (jsonErr && !countries) ? React.createElement('div',{className:'mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded'}, 'No se pudo cargar country.json / sectores.json. Colócalos junto al HTML en tu servidor.'):null,
               loading?React.createElement('div',{className:'mt-4 text-sm text-slate-600'},'Leyendo PDF…'):null,
               error?React.createElement('div',{className:'mt-4 text-sm text-red-600'},error):null,
               pdfResumen?React.createElement('div',{className:'mt-2 text-sm text-slate-500'},'Resumen del PDF: '+pdfResumen.count+' posiciones · '+fmt(pdfResumen.total)+' EUR'):null
@@ -316,7 +272,7 @@
           React.createElement('section',{className:'overflow-auto rounded-2xl bg-white shadow'},
             React.createElement('table',{className:'min-w-full text-sm'},
               React.createElement('thead',null,
-                React.createElement('tr',null,['Nombre','ISIN','Títulos','Precio EUR','Cotización EUR','Sector','País/Región','Origen'].map(h =>
+                React.createElement('tr',null,['Nombre','ISIN','Títulos','Precio EUR','Cotización EUR','Sector','País'].map(h =>
                   React.createElement('th',{key:h,className:'px-3 py-2 text-left font-semibold text-slate-600'},h)
                 ))
               ),
@@ -329,8 +285,7 @@
                     React.createElement('td',{className:'px-3 py-2 mono'},r.precio_eur!=null?fmt(r.precio_eur):''),
                     React.createElement('td',{className:'px-3 py-2 mono'},r.cotizacion_eur!=null?fmt(r.cotizacion_eur):''),
                     React.createElement('td',{className:'px-3 py-2'},r.sector||''),
-                    React.createElement('td',{className:'px-3 py-2'},r.region||''),
-                    React.createElement('td',{className:'px-3 py-2 mono text-xs text-slate-500'},r.source||'block')
+                    React.createElement('td',{className:'px-3 py-2'},r.pais||'')
                   )
                 )
               ),
@@ -340,7 +295,6 @@
                   React.createElement('td',{className:'px-3 py-2 mono'},totalPosiciones),
                   React.createElement('td',{className:'px-3 py-2 mono'}),
                   React.createElement('td',{className:'px-3 py-2 mono'},fmt(totalValor)),
-                  React.createElement('td',{className:'px-3 py-2'}),
                   React.createElement('td',{className:'px-3 py-2'}),
                   React.createElement('td',{className:'px-3 py-2'})
                 )
