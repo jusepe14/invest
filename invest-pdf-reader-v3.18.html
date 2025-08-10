@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Invest | Lector PDF cartera (v3.18 — sectores 100%, overrides y exportación)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <style>
+      html, body { height: 100%; }
+      .mono { font-variant-numeric: tabular-nums; }
+      .badge { display:inline-flex; align-items:center; gap:.5rem; padding:.125rem .5rem; border-radius:.5rem; font-size:.75rem; }
+      table thead th { position: sticky; top: 0; background: #f1f5f9; }
+      .chip { padding: .125rem .5rem; border-radius: .5rem; font-size: .75rem; }
+    </style>
+  </head>
+  <body class="bg-slate-50 text-slate-800">
+    <div id="root"></div>
+    <script>
+      'use strict';
+      // ===== Utilidades =====
+      function parseEsNumber(s){ if (s == null) return null; s = (''+s).replace(/\./g,'').replace(/,/g,'.').replace(/\s/g,''); var v = Number(s); return Number.isFinite(v) ? v : null; }
+      function fmt(n){ return n != null ? n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''; }
+      function saveFile(name, text){ var blob=new Blob([text],{type:'application/octet-stream'}); var url=URL.createObjectURL(blob); var a=document.createElement('a'); a.href=url; a.download=name; a.click(); setTimeout(function(){ URL.revokeObjectURL(url); }, 500); }
+
+      // ===== Región por ISIN =====
+      function regionFromISIN(isin){ var m = (isin||'').match(/^([A-Z]{2})/); var cc = m ? m[1] : null; if (!cc) return { region:null };
+        var EUROPE = new Set(['AT','BE','BG','CH','CY','CZ','DE','DK','EE','ES','FI','FR','GB','GG','GI','GR','HR','HU','IE','IM','IS','IT','JE','LI','LT','LU','LV','MC','MT','NL','NO','PL','PT','RO','RS','SE','SI','SK','SM','UA']);
+        var ASIA = new Set(['AE','BH','BN','CN','HK','ID','IL','IN','IQ','IR','JP','JO','KH','KR','KW','KZ','LB','MO','MM','MN','MY','NP','OM','PH','PK','QA','SA','SG','TH','TJ','TM','TR','TW','UZ','VN']);
+        if (cc==='US') return { region:'EEUU' }; if (EUROPE.has(cc)) return { region:'Europa' }; if (ASIA.has(cc)) return { region:'Asia' }; return { region:cc } }
+
+      // ===== Nombre (solo primera línea útil) =====
+      function cleanNameBlock(block){ if (!block) return '';
+        var lines = String(block).split(/\n+/).map(function(s){ return s.replace(/\s{2,}/g,' ').trim(); }).filter(Boolean);
+        var headerRe = /(VALOR NOMINAL|NOMBRE DEL VALOR|PRECIO POR T[ÍI]TULO|COTIZACI[ÓO]N EN EUR|PA[ÍI]S DE CUSTODIA|TRADE REPUBLIC|EXTRACTO|CUENTA DE VALORES|RESUMEN|IBAN|BIC|DEP[ÓO]SITO)/i;
+        lines = lines.filter(function(l){ return !headerRe.test(l) && !/t[íi]t\.?/i.test(l); });
+        if (!lines.length) return '';
+        var line = lines[0];
+        line = line.replace(/^\d[\d\.,]*\s*t[íi]t\.?\s*/i,'');
+        line = line.split(/ISIN\s*:/i)[0].trim();
+        var qual = /\b(Registered|Actions?|Acciones?|Shares?|Shs|ADR|ADS|Ord\.?|Bearer|Nominative|EO\b|DL\b|Class|Serie|Series|Port\.?|Nominal)\b/i;
+        var qm = qual.exec(line); if (qm) line = line.slice(0, qm.index).trim();
+        line = line.replace(/[·•\-–—,:;]+$/,'').trim();
+        return line; }
+
+      // ===== Sector (ISIN -> sector, luego nombre -> sector, fallback 'Por clasificar') =====
+      // Base ampliable. Añade aquí tus valores más frecuentes.
+      var SECTOR_DICT_BASE = {
+        // España
+        'ES0109260531': 'Telecomunicaciones/Ingeniería', // Amper
+        'ES0140609019': 'Banca', // Santander
+        'ES0113900J37': 'Banca', // BBVA
+        'ES0173516115': 'Energía (Oil & Gas)', // Repsol
+        // Francia
+        'FR0000120628': 'Seguros', // AXA
+        // Alemania
+        'DE0008404005': 'Aseguradoras', // Allianz
+        'DE0006599905': 'Automoción', // Daimler/Mercedes-Benz
+        // EEUU Pagos/Fintech
+        'US92826C8394': 'Pagos/Fintech', // Visa A
+        'US57636Q1040': 'Pagos/Fintech', // Mastercard A
+        'US70450Y1038': 'Pagos/Fintech', // PayPal
+        'US8522341036': 'Pagos/Fintech', // Block (Square)
+        'US3377381088': 'Pagos/Fintech', // Fiserv
+        'US37940X1028': 'Pagos/Fintech', // Global Payments
+        // Tech
+        'US30212P3038': 'Tecnología', // Meta
+        'US5949181045': 'Tecnología', // Microsoft
+        'US0231351067': 'Tecnología', // Amazon
+        'US30303M1027': 'Tecnología (Redes Sociales)', // Meta (antiguo), mantener por compat
+        'US88160R1014': 'Tecnología (Semiconductores)', // NVIDIA
+        'US67066G1040': 'Semiconductores', // NXP
+        'NL0010273215': 'Semiconductores', // ASML
+        // Salud
+        'US4781601046': 'Salud', // Johnson & Johnson
+        'US09062X1037': 'Salud', // Biogen
+        // Consumo defensivo
+        'US7134481081': 'Bebidas (Consumo defensivo)', // Pepsi
+        'US1912161007': 'Bebidas (Consumo defensivo)', // KO
+        'US7181721090': 'Tabaco', // Altria
+        // Energía
+        'US30231G1022': 'Energía (Petróleo y Gas)', // Exxon
+        'US1667641005': 'Energía (Petróleo y Gas)', // Chevron
+        // REIT
+        'US0084921008': 'REIT (Retail)',
+        'US7561091049': 'REIT (Diversificado)',
+        // Varios
+        'BMG9456A1009': 'Energía/Transporte (GNL)' // Golar LNG
+      };
+      var SECTOR_LS_KEY = 'sectorOverridesV1';
+      function loadSectorOverrides(){ try { var raw = localStorage.getItem(SECTOR_LS_KEY); return raw ? JSON.parse(raw) : {}; } catch(e){ return {}; } }
+      function saveSectorOverrides(obj){ try { localStorage.setItem(SECTOR_LS_KEY, JSON.stringify(obj, null, 2)); } catch(e){} }
+      function inferSectorByName(name){
+        var n = (name||'').toLowerCase();
+        if (/\bvisa\b/.test(n) || /mastercard/.test(n) || /paypal/.test(n) || /\bblock\b/.test(n) || /\bsquare\b/.test(n)) return 'Pagos/Fintech';
+        if (/amper\b/.test(n) || /telecom|telef|infraestructura|ingenier[ií]a/.test(n)) return 'Telecomunicaciones/Ingeniería';
+        if (/bank|banco|banc|financial|financiera/.test(n)) return 'Banca';
+        if (/insurance|asegur|mutu[a|o]/.test(n)) return 'Seguros';
+        if (/oil|petrol|energy|energ|gas/.test(n)) return 'Energía (Petróleo y Gas)';
+        if (/semiconductor|chip|wafer|foundry/.test(n)) return 'Semiconductores';
+        if (/reit/.test(n)) return 'REIT';
+        if (/pharma|health|salud|biotech/.test(n)) return 'Salud';
+        if (/beverage|bev|drink|bebidas|food|alimenta/.test(n)) return 'Consumo defensivo';
+        if (/automotive|auto|motor|bmw|mercedes|daimler|tesla/.test(n)) return 'Automoción';
+        if (/utilities|utility|energ[íi]a el[ée]ctrica|gas natural/.test(n)) return 'Utilities';
+        return '';
+      }
+      function resolveSector(name, isin, overrides, base){
+        if (overrides && overrides[isin]) return overrides[isin];
+        if (base && base[isin]) return base[isin];
+        var byName = inferSectorByName(name);
+        return byName || 'Por clasificar';
+      }
+
+      // ===== Bloques por ISIN =====
+      function buildBlocks(text){ var re = /ISIN\s*:?[^A-Z0-9]*([A-Z0-9]{12})/gi; var matches = []; var m; while ((m = re.exec(text)) !== null) matches.push({ start: m.index, isin: m[1].toUpperCase() }); var blocks = []; for (var i=0;i<matches.length;i++){ var cur = matches[i]; var nextStart = (i+1 < matches.length) ? matches[i+1].start : text.length; var pre = text.slice(Math.max(0, cur.start - 600), cur.start); var post = text.slice(cur.start, nextStart); blocks.push({ pre: pre, post: post, isin: cur.isin }); } return blocks; }
+      function firstPrecio(post){ var m = /\n(\d{1,4}[\.,]\d{2})\b/.exec(post); return m ? { value: parseEsNumber(m[1]), index: m.index + m[0].length } : { value: null, index: -1 }; }
+      function firstImporteEurAfter(post, startIdx){ if (startIdx < 0) return null; var ventana = post.slice(startIdx, startIdx + 500); var m = /(\d{1,3}(?:\.\d{3})*(?:,\d{2}))\s*EUR/i.exec(ventana); return m ? parseEsNumber(m[1]) : null; }
+      function extractFromBlock(obj){ var pre=obj.pre, post=obj.post, isin=obj.isin; var titMatchAll = pre.match(/([0-9][\d\.,]*)\s*t[íi]t\.?/gi); var titMatch = null; if (titMatchAll && titMatchAll.length){ var last = titMatchAll[titMatchAll.length-1]; var numM = /([0-9][\d\.,]*)/i.exec(last); titMatch = numM; } var titulos = titMatch ? parseEsNumber(titMatch[1]) : null; if (titulos != null && titulos >= 1000000) titulos = null; var nombreRaw = titMatch ? pre.slice(pre.lastIndexOf(titMatch[1]) + titMatch[1].length) : pre.split(/\n/).slice(-5).join('\n'); var nombre = cleanNameBlock(nombreRaw); var precioObj = firstPrecio(post); var precio = precioObj.value; var precioIdx = precioObj.index; var cotizacion_eur = firstImporteEurAfter(post, precioIdx); if (cotizacion_eur == null && precio != null && titulos != null) cotizacion_eur = +(precio * titulos).toFixed(2); if (precio != null && titulos != null && cotizacion_eur != null){ var approx = +(precio * titulos).toFixed(2); if (cotizacion_eur > approx * 1.5) cotizacion_eur = approx; } var rr = regionFromISIN(isin); return { nombre: nombre, isin: isin, titulos: titulos, precio_eur: precio, cotizacion_eur: cotizacion_eur, region: rr.region || '', source: 'block' }; }
+
+      // ===== React App =====
+      var useState = React.useState, useMemo = React.useMemo, useEffect = React.useEffect;
+      function App(){
+        var _a = useState([]), rows = _a[0], setRows = _a[1];
+        var _b = useState(false), loading = _b[0], setLoading = _b[1];
+        var _c = useState(''), error = _c[0], setError = _c[1];
+        var _d = useState(''), filter = _d[0], setFilter = _d[1];
+        var _e = useState(null), pdfResumen = _e[0], setPdfResumen = _e[1];
+        var _f = useState(loadSectorOverrides()), sectorOverrides = _f[0], setSectorOverrides = _f[1];
+
+        // Deriva sector final para cada fila
+        var resolvedRows = useMemo(function(){
+          return rows.map(function(r){
+            var sector = resolveSector(r.nombre, r.isin, sectorOverrides, SECTOR_DICT_BASE);
+            return Object.assign({}, r, { sector: sector });
+          });
+        }, [rows, sectorOverrides]);
+
+        var filtered = useMemo(function(){
+          var q=(filter||'').toLowerCase();
+          return resolvedRows.filter(function(r){ return !q || (r.nombre||'').toLowerCase().includes(q) || (r.isin||'').toLowerCase().includes(q) || (r.sector||'').toLowerCase().includes(q); });
+        },[resolvedRows,filter]);
+
+        var totalValor=useMemo(function(){ return +filtered.reduce(function(a,r){ return a+(r.cotizacion_eur||0); },0).toFixed(2); },[filtered]);
+        var totalPosiciones = filtered.length;
+
+        // Falta de sector -> panel de completar
+        var missing = useMemo(function(){ return resolvedRows.filter(function(r){ return (r.sector||'') === 'Por clasificar'; }); }, [resolvedRows]);
+
+        useEffect(function(){ saveSectorOverrides(sectorOverrides); }, [sectorOverrides]);
+
+        async function onFile(file){
+          setError(''); setLoading(true);
+          try{
+            var pdfData=new Uint8Array(await file.arrayBuffer());
+            var pdf=await pdfjsLib.getDocument({ data: pdfData }).promise;
+            var fullText='';
+            for (var i=1;i<=pdf.numPages;i++){
+              var page=await pdf.getPage(i);
+              var content=await page.getTextContent();
+              var pageText=content.items.map(function(it){ return it.str; }).join('\n');
+              fullText+='\n'+pageText+'\n';
+            }
+            var text=fullText.replace(/\u00A0/g,' ').replace(/\s+\n/g,'\n').replace(/\n{2,}/g,'\n');
+            var data=buildBlocks(text).map(extractFromBlock);
+            var resumenMatch=text.match(/N[ÚU]MERO\s+DE\s+POSICIONES:\s*(\d+)\s+(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)/i);
+            var resumen=resumenMatch?{ count:Number(resumenMatch[1]), total:parseEsNumber(resumenMatch[2]) }:null;
+            setRows(data); setPdfResumen(resumen);
+            if(resumen){
+              var sum=+data.reduce(function(a,r){ return a+(r.cotizacion_eur||0); },0).toFixed(2);
+              if(resumen.count!==data.length || sum!==+(resumen.total.toFixed(2))){
+                setError('Aviso: el PDF dice '+resumen.count+' posiciones y '+fmt(resumen.total)+' EUR. Hemos leído '+data.length+' y '+fmt(sum)+' EUR.');
+              }
+            }
+          }catch(e){ setError('No se pudo leer el PDF. Asegúrate de subir el extracto original (ES).'); }
+          finally{ setLoading(false); }
+        }
+
+        function onExportSectores(){
+          var payload = JSON.stringify(sectorOverrides, null, 2);
+          saveFile('sectores.json', payload);
+        }
+        function onImportSectores(file){
+          var reader = new FileReader();
+          reader.onload = function(){ try{ var obj = JSON.parse(String(reader.result||'{}')); setSectorOverrides(obj); } catch(e){ alert('JSON inválido'); } };
+          reader.readAsText(file);
+        }
+        function onResetSectores(){
+          if (confirm('¿Seguro que quieres borrar tus overrides de sectores?')){
+            setSectorOverrides({}); localStorage.removeItem(SECTOR_LS_KEY);
+          }
+        }
+        function setSector(isin, sector){
+          setSectorOverrides(Object.assign({}, sectorOverrides, (function(){ var x={}; x[isin]=sector; return x; })()));
+        }
+
+        function exportCSV(){
+          var csv=Papa.unparse(filtered.map(function(r){ return { nombre:r.nombre, isin:r.isin, titulos:r.titulos, precio_eur:r.precio_eur, cotizacion_eur:r.cotizacion_eur, sector:r.sector, region:r.region, source:r.source }; }),{ delimiter:';' });
+          saveFile('cartera_export.csv', csv);
+        }
+
+        return React.createElement('div',{className:'max-w-7xl mx-auto p-4 md:p-8 space-y-6'},
+          React.createElement('header',{className:'flex items-center justify-between gap-3 flex-wrap'},
+            React.createElement('h1',{className:'text-2xl md:text-3xl font-bold'},'Invest · Lector de extractos (v3.18)'),
+            React.createElement('div',{className:'flex items-center gap-2'}, 
+              React.createElement('span',{className:'badge bg-slate-100 text-slate-700'},'Posiciones: '+totalPosiciones),
+              React.createElement('span',{className:'badge bg-slate-100 text-slate-700'},'Valor: '+fmt(totalValor)+' EUR')
+            ),
+            React.createElement('div',{className:'flex items-center gap-2 grow md:grow-0'},
+              React.createElement('button',{onClick:function(){var el=document.getElementById('file'); if(el) el.click();},className:'px-3 py-2 rounded-xl bg-slate-900 text-white shadow hover:opacity-90'},'Subir PDF'),
+              React.createElement('button',{onClick:exportCSV,className:'px-3 py-2 rounded-xl border shadow bg-white'},'Exportar CSV'),
+              React.createElement('button',{onClick:onExportSectores,className:'px-3 py-2 rounded-xl border shadow bg-white'},'Exportar sectores'),
+              React.createElement('label',{className:'px-3 py-2 rounded-xl border shadow bg-white cursor-pointer'},'Importar sectores',
+                React.createElement('input',{type:'file', accept:'.json,application/json', style:{display:'none'}, onChange:function(e){ if(e && e.target && e.target.files && e.target.files[0]) onImportSectores(e.target.files[0]); }})
+              ),
+              React.createElement('button',{onClick:onResetSectores,className:'px-3 py-2 rounded-xl border shadow bg-white'},'Reset sectores')
+            )
+          ),
+          React.createElement('section',{className:'grid md:grid-cols-3 gap-4'},
+            React.createElement('div',{className:'md:col-span-2 p-4 rounded-2xl bg-white shadow'}, 
+              React.createElement('label',{className:'text-sm text-slate-500'},'Sube tu PDF de Trade Republic (ES):'),
+              React.createElement('input',{id:'file',type:'file',accept:'application/pdf',style:{display:'none'},onChange:function(e){ if(e&&e.target&&e.target.files&&e.target.files[0]) onFile(e.target.files[0]); }}),
+              loading?React.createElement('div',{className:'mt-4 text-sm text-slate-600'},'Leyendo PDF…'):null,
+              error?React.createElement('div',{className:'mt-4 text-sm text-red-600'},error):null,
+              pdfResumen?React.createElement('div',{className:'mt-2 text-sm text-slate-500'},'Resumen del PDF: '+pdfResumen.count+' posiciones · '+fmt(pdfResumen.total)+' EUR'):null
+            ),
+            React.createElement('div',{className:'p-4 rounded-2xl bg-white shadow space-y-3'}, 
+              React.createElement('input',{className:'w-full px-3 py-2 rounded-xl border',placeholder:'Filtrar por nombre, ISIN o sector…',value:filter,onChange:function(e){ setFilter(e.target.value); }}),
+              React.createElement('div',{className:'text-sm text-slate-500'},'Filas visibles: '+filtered.length),
+              React.createElement('div',{className:'text-sm text-slate-500 mono'},'Total posiciones (visibles): '+totalPosiciones),
+              React.createElement('div',{className:'text-sm text-slate-500 mono'},'Total valor (visibles): '+fmt(totalValor)+' EUR')
+            )
+          ),
+          React.createElement('section',{className:'overflow-auto rounded-2xl bg-white shadow'},
+            React.createElement('table',{className:'min-w-full text-sm'},
+              React.createElement('thead',null,
+                React.createElement('tr',null,['Nombre','ISIN','Títulos','Precio EUR','Cotización EUR','Sector','Región','Origen'].map(function(h){ return React.createElement('th',{key:h,className:'px-3 py-2 text-left font-semibold text-slate-600'},h); }))
+              ),
+              React.createElement('tbody',null,
+                filtered.map(function(r,idx){
+                  var sector = r.sector;
+                  return React.createElement('tr',{key:String(idx),className:(idx%2?'bg-slate-50':'')},
+                    React.createElement('td',{className:'px-3 py-2'},r.nombre||''),
+                    React.createElement('td',{className:'px-3 py-2 mono'},r.isin||''),
+                    React.createElement('td',{className:'px-3 py-2 mono'},r.titulos!=null?r.titulos:''),
+                    React.createElement('td',{className:'px-3 py-2 mono'},r.precio_eur!=null?fmt(r.precio_eur):''),
+                    React.createElement('td',{className:'px-3 py-2 mono'},r.cotizacion_eur!=null?fmt(r.cotizacion_eur):''),
+                    React.createElement('td',{className:'px-3 py-2'}, 
+                      React.createElement('span',{className:'chip '+(sector==='Por clasificar'?'bg-amber-100 text-amber-800':'bg-slate-100 text-slate-700')}, sector || 'Por clasificar')
+                    ),
+                    React.createElement('td',{className:'px-3 py-2'},regionFromISIN(r.isin).region||''),
+                    React.createElement('td',{className:'px-3 py-2 mono text-xs text-slate-500'},r.source||'block')
+                  );
+                })
+              ),
+              React.createElement('tfoot',null,
+                React.createElement('tr',{className:'bg-slate-100 font-semibold'},
+                  React.createElement('td',{className:'px-3 py-2',colSpan:2},'Totales (visibles)'),
+                  React.createElement('td',{className:'px-3 py-2 mono'},totalPosiciones),
+                  React.createElement('td',{className:'px-3 py-2 mono'}),
+                  React.createElement('td',{className:'px-3 py-2 mono'},fmt(totalValor)),
+                  React.createElement('td',{className:'px-3 py-2'}),
+                  React.createElement('td',{className:'px-3 py-2'}),
+                  React.createElement('td',{className:'px-3 py-2'})
+                )
+              )
+            )
+          ),
+          missing.length ? React.createElement('section',{className:'p-4 rounded-2xl bg-white shadow space-y-3 mt-4'},
+            React.createElement('div',{className:'font-semibold'},'Completar sectores (', missing.length ,' por clasificar)'),
+            React.createElement('div',{className:'grid md:grid-cols-2 gap-3'}, 
+              missing.map(function(r,i){
+                return React.createElement('div',{key:r.isin||i, className:'flex items-center gap-2'}, 
+                  React.createElement('div',{className:'flex-1'}, 
+                    React.createElement('div',{className:'text-sm font-medium'}, r.nombre || '(sin nombre)'),
+                    React.createElement('div',{className:'text-xs text-slate-500 mono'}, r.isin )
+                  ),
+                  React.createElement('input',{className:'px-2 py-1 rounded border w-56', placeholder:'Sector…', value: sectorOverrides[r.isin] || '', onChange:function(e){ setSector(r.isin, e.target.value); }})
+                );
+              })
+            )
+          ) : null
+        );
+      }
+      ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+    </script>
+  </body>
+</html>
